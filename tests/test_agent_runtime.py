@@ -39,7 +39,7 @@ def fake_cli(monkeypatch,provider,result):
 @pytest.mark.parametrize('provider',['codex','claude'])
 def test_provider_receives_image_exact_profile_and_validates_output(tmp_path,monkeypatch,provider):
     calls=fake_cli(monkeypatch,provider,{'ready':True});events=[]
-    monkeypatch.setenv('OPENAI_API_KEY','not-forwarded');monkeypatch.setenv('CLAUDECODE','1')
+    monkeypatch.setenv('TYPESAFE_API_KEY','not-forwarded');monkeypatch.setenv('OPENAI_API_KEY','not-forwarded');monkeypatch.setenv('CLAUDECODE','1')
     image=tmp_path/'input.png';Image.new('RGB',(96,96),'white').save(image)
     async def emit(event):events.append(event)
     timing=AnalysisTiming(tmp_path/'timing')
@@ -56,7 +56,7 @@ def test_provider_receives_image_exact_profile_and_validates_output(tmp_path,mon
     if provider=='claude':assert len(report['local_python_calls'])==2
     assert result=={'ready':True}
     args=calls[0]['args'];environment=calls[0]['options']['env']
-    assert 'OPENAI_API_KEY' not in environment and 'CLAUDECODE' not in environment
+    assert 'OPENAI_API_KEY' not in environment and 'CLAUDECODE' not in environment and 'TYPESAFE_API_KEY' not in environment
     assert events[0]['message']=='Locating the requested peaks and points'
     if provider=='codex':
         assert 'service_tier=priority' in args and 'model_reasoning_effort=medium' in args and 'gpt-6-luna' in args

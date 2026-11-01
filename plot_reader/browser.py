@@ -40,6 +40,7 @@ from .pdf_figures import FigureIntakeError, extract_figures, page_range, sanitiz
 from .browser_evidence import (coordinate_evidence, selection_overlay,
                                apply_selection_review, unsupported_centers, focused_marker_candidates, unique_selection_labels,
                                bind_review_candidates)
+from .scatter_beta import plan_scatter, ground_scatter_beta
 from .luna_runtime import (COMMENT_SCHEMA, SELECTED_SCHEMA, SELECTION_REVIEW_SCHEMA, FOCUSED_REVIEW_SCHEMA, LunaError, LunaRunner,
                            worker_dir, assistant_profile, EFFORT_CHOICES)
 
@@ -531,7 +532,13 @@ async def create_job(request: Request) -> Response:
         if not isinstance(effort, str):
             raise ValueError("Choose an agent effort")
         profile = assistant_profile(effort)
-        request_data = {"upload_id": upload_id, "source_sha256": source["sha256"],
+        workflow = body.get("scatter_workflow", "legacy")
+        jev_mode = body.get("jev_mode", "off")
+        if not isinstance(workflow, str) or not isinstance(jev_mode, str) or workflow not in {"legacy", "beta"} or jev_mode not in {"off", "shadow", "assist"}:
+            raise ValueError("Choose valid scatter workflow and JEV settings")
+        if jev_mode != "off" and (workflow != "beta" or category != "plot" or mode != "selected"):
+            raise ValueError("JEV image assistance requires beta selected scatter extraction")
+        request_data = {"scatter_workflow": workflow, "jev_mode": jev_mode, "upload_id": upload_id, "source_sha256": source["sha256"],
                         "target": target, "category": category, "mode": mode,
                         "channel_description": description,
                         "targets": targets,
@@ -543,6 +550,8 @@ async def create_job(request: Request) -> Response:
                         "created_at": _now()}
         if request_data["normalization"] and not request_data["normalization_reference"]:
             raise ValueError("Choose a normalization reference feature")
+        if jev_mode != "off" and (positions or request_data["normalization"] or not _is_bulk_point_request(request_data)):
+            raise ValueError("JEV image assistance requires all-points extraction without x queries or normalization")
         job_id = uuid.uuid4().hex
         folder = _job_dir(job_id)
         folder.mkdir(parents=True, exist_ok=True)
@@ -624,7 +633,7 @@ def _question_policy(plan: dict[str, Any], request_data: dict[str, Any]) -> dict
         message = "Agent questions are disabled; interpretation needs review: " + "; ".join(q["question"] for q in questions)
         plan.setdefault("question_policy_warnings", []).append(message)
         plan.setdefault("notes", []).append(message)
-    if not request_data.get("allow_agent_questions", False) and not plan.get("selections"):
+    if not request_data.get("allow_agent_questions", False) and not plan.get("selections") and not (plan.get("scatter_beta") and plan.get("marker_series") and not plan.get("_beta_grounded")):
         message = "Requested features could not be supported from the image; agent questions are disabled."
         plan["selections"] = [{"label": "Unresolved requested features", "series": "Unresolved", "mode": "exact",
             "candidate_id": None, "pixel": None, "x_value": None, "review_id": None,
@@ -1019,10 +1028,16 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
             images = [str(image_path)] + [item["path"] for item in planning_evidence] + review_images
             prompt = _selected_prompt(request_data, inspection) + "\nAttached coordinate evidence: " + json.dumps(planning_evidence)
             plan = resumed_plan
+            beta = (request_data.get("scatter_workflow", "legacy") == "beta" and
+                    request_data["category"] == "plot" and _is_bulk_point_request(request_data)
+                    and not request_data.get("x_positions") and not request_data.get("normalization"))
             if plan is None:
-                plan = await task_runner.call(prompt=prompt, schema=_selected_schema(request_data), images=images,
-                                              workdir=worker_dir(str(folder), "selected-plan"))
-            if _is_bulk_point_request(request_data) and _is_aggregate_unresolved(plan):
+                if beta:
+                    plan = await plan_scatter(task_runner, image_path, folder, request_data, inspection)
+                else:
+                    plan = await task_runner.call(prompt=prompt, schema=_selected_schema(request_data), images=images,
+                                                  workdir=worker_dir(str(folder), "selected-plan"))
+            if not beta and _is_bulk_point_request(request_data) and _is_aggregate_unresolved(plan):
                 await _emit(app, job_id, "stage", "Expanding the request to individual plotted points", stage="inspect")
                 repair_prompt = prompt + "\nYour prior plan collapsed the whole request to one unresolved item. Revise it as one selection per visible marker in the requested chart. Use visible marker centers from the image, assign a stable series identity using marker and legend evidence, and use mode exact where local marker refinement is unavailable. Continue with calibrated values even when calibration checks need a warning; do not discard the point selections."
                 try:
@@ -1051,6 +1066,10 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
                 return
             if plan.get("notes"):
                 await _emit(app, job_id, "review_note", "Image review notes", notes=plan["notes"])
+            if beta and plan.get("scatter_beta") and not plan.get("_beta_grounded"):
+                await _job_update(app, job_id, stage="coordinate_review")
+                plan = await ground_scatter_beta(task_runner, plan, image_path, folder, request_data)
+                plan = _question_policy(plan, request_data)
             await _job_update(app, job_id, stage="measure", plan=plan)
             if plan.get("x_axis") is None:
                 measured = _unresolved_measurement(plan["selections"], str(image_path), inspection,
@@ -1068,52 +1087,59 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
                                                    plan.get("baseline_pixel") if request_data.get("normalization") else None,
                                                    False)
                 _json(folder / "draft-measurement.json", measured)
-                await _job_update(app, job_id, stage="coordinate_review")
-                await _emit(app, job_id, "stage", "Checking every selected pixel against the source", stage="coordinate_review")
-                draft_points = {item["label"]: item for item in measured["points"]}
-                review_records = [{**item, "selection_id": str(index),
-                                   "pixel": draft_points.get(item["label"], {}).get("pixel") or item.get("pixel")}
-                                  for index, item in enumerate(plan["selections"], 1)]
-                draft_overlay = folder / "draft-selections.png"
-                await run_local(selection_overlay, image_path, review_records, draft_overlay)
-                reviewed_evidence = await run_local(coordinate_evidence, image_path, folder / "review-evidence")
-                review_tiles = reviewed_evidence[1:] or reviewed_evidence
-                source_candidates = await run_local(focused_marker_candidates, image_path, review_tiles, 1)
-                _json(folder / "review-candidates.json", {"candidates": source_candidates, "evidence": review_tiles})
-                coordinate_prompt = f"""Audit EACH numbered marker location against the unannotated source and coordinate-grid crops. The second image is a DRAFT overlay with selection IDs, not ground truth. Blue grid labels are ORIGINAL source pixels (x right, y DOWN); never return crop-relative coordinates. Automatic candidates and plot bounds may be wrong. Legend entries, axis ink, text, blank space, and fitted-curve ink are not experimental marker centers. Identify the requested marker SHAPE and series before choosing its center. Inspect every item independently; shared time positions do not establish y. Correct obvious mislocations by reading the actual marker center against the source grid, including points mistakenly over the legend. Do not interpolate a curve or invent a point at an assumed time. Preserve overlapping-marker uncertainty; an approximate visible center may be retained with verdict uncertain and a clear reason. Return each selection_id exactly once. confirmed/corrected require the reviewed ORIGINAL pixel. uncertain may use a supported approximate pixel or null if no position can be read. Do not change data values or calibrations; the host computes numbers from reviewed pixels.
-User target: {request_data['target']['explanation']}
-Feature channel: {request_data['category']}; {request_data.get('channel_description')}. For spectra, audit visible peak apices instead of marker shapes. For curve queries, audit the intended trace at x_value; the host preserves that requested x position. A fitted curve is appropriate only when the user requested curve values.
-Selections: {json.dumps(review_records, ensure_ascii=False)}
-Images after source and draft overlay: {json.dumps(review_tiles)}
-Source-measured contour candidates: {json.dumps(source_candidates)}
-Purple C IDs in the crop images mark source-measured contour centers. For hollow square, triangle, diamond, or circle markers, choose the matching candidate_id whenever visible; the host substitutes its exact source pixel. Do not re-estimate that candidate's numerical coordinates. A candidate can also be text or a legend item, so verify shape, series and plot context. When no candidate supports a hollow marker, use candidate_id null and verdict uncertain; preserve an approximate pixel with a warning. For plus/cross markers and curve/peak queries, manual source pixels are allowed where connected ink prevents a bounded contour.
-"""
-                try:
-                    if _is_bulk_point_request(request_data) and request_data["category"] == "plot":
-                        plan = await ground_scatter(task_runner, plan, image_path, folder, request_data['target']['explanation'])
-                    else:
-                        review = await task_runner.call(prompt=coordinate_prompt, schema=FOCUSED_REVIEW_SCHEMA,
-                            images=[str(image_path), str(draft_overlay)] + [item["path"] for item in review_tiles],
-                            workdir=worker_dir(str(folder), "coordinate-review"))
-                        _json(folder / "coordinate-review.json", review)
-                        require_contours = request_data["category"] == "plot" and (
-                            "scatter" in request_data.get("channel_description", "").lower() or _is_bulk_point_request(request_data))
-                        review = bind_review_candidates(review, source_candidates, plan["selections"] if require_contours else None,
-                                                        max_shift=60 if require_contours else None)
-                        plan, coordinate_warnings = apply_selection_review(plan, review, tuple(inspection["image_size"]))
-                        plan = await _refine_unsupported_centers(task_runner, plan, image_path, folder, require_contours)
+                if plan.get("_beta_grounded"):
                     coordinate_warnings = [f"{item['label']}: {item.get('coordinate_review_note', '')}"
-                                           for item in plan["selections"] if item.get("coordinate_review") == "uncertain"]
-                    measured = await run_local(measure_selected, inspection["session_id"],
-                        x_axis, plan["selections"], y_axis,
-                        plan.get("reference_label") if request_data.get("normalization") else None,
-                        plan.get("baseline_pixel") if request_data.get("normalization") else None,
-                        False)
-                except (LunaError, ValueError) as exc:
-                    coordinate_warnings = [f"Pixel review could not complete: {exc}. Selected measurements are retained for review."]
-                    for selection in plan["selections"]:
-                        selection["coordinate_review"] = "uncertain"
-                        selection["coordinate_review_note"] = coordinate_warnings[0]
+                        for item in plan['selections'] if item.get('coordinate_review') == 'uncertain']
+                    measured['inventory_complete'] = plan.get('inventory_complete', False)
+                    measured['unresolved_inventory'] = plan.get('unresolved_inventory', [])
+                    coordinate_warnings.extend(measured['unresolved_inventory'])
+                else:
+                    await _job_update(app, job_id, stage="coordinate_review")
+                    await _emit(app, job_id, "stage", "Checking every selected pixel against the source", stage="coordinate_review")
+                    draft_points = {item["label"]: item for item in measured["points"]}
+                    review_records = [{**item, "selection_id": str(index),
+                                       "pixel": draft_points.get(item["label"], {}).get("pixel") or item.get("pixel")}
+                                      for index, item in enumerate(plan["selections"], 1)]
+                    draft_overlay = folder / "draft-selections.png"
+                    await run_local(selection_overlay, image_path, review_records, draft_overlay)
+                    reviewed_evidence = await run_local(coordinate_evidence, image_path, folder / "review-evidence")
+                    review_tiles = reviewed_evidence[1:] or reviewed_evidence
+                    source_candidates = await run_local(focused_marker_candidates, image_path, review_tiles, 1)
+                    _json(folder / "review-candidates.json", {"candidates": source_candidates, "evidence": review_tiles})
+                    coordinate_prompt = f"""Audit EACH numbered marker location against the unannotated source and coordinate-grid crops. The second image is a DRAFT overlay with selection IDs, not ground truth. Blue grid labels are ORIGINAL source pixels (x right, y DOWN); never return crop-relative coordinates. Automatic candidates and plot bounds may be wrong. Legend entries, axis ink, text, blank space, and fitted-curve ink are not experimental marker centers. Identify the requested marker SHAPE and series before choosing its center. Inspect every item independently; shared time positions do not establish y. Correct obvious mislocations by reading the actual marker center against the source grid, including points mistakenly over the legend. Do not interpolate a curve or invent a point at an assumed time. Preserve overlapping-marker uncertainty; an approximate visible center may be retained with verdict uncertain and a clear reason. Return each selection_id exactly once. confirmed/corrected require the reviewed ORIGINAL pixel. uncertain may use a supported approximate pixel or null if no position can be read. Do not change data values or calibrations; the host computes numbers from reviewed pixels.
+    User target: {request_data['target']['explanation']}
+    Feature channel: {request_data['category']}; {request_data.get('channel_description')}. For spectra, audit visible peak apices instead of marker shapes. For curve queries, audit the intended trace at x_value; the host preserves that requested x position. A fitted curve is appropriate only when the user requested curve values.
+    Selections: {json.dumps(review_records, ensure_ascii=False)}
+    Images after source and draft overlay: {json.dumps(review_tiles)}
+    Source-measured contour candidates: {json.dumps(source_candidates)}
+    Purple C IDs in the crop images mark source-measured contour centers. For hollow square, triangle, diamond, or circle markers, choose the matching candidate_id whenever visible; the host substitutes its exact source pixel. Do not re-estimate that candidate's numerical coordinates. A candidate can also be text or a legend item, so verify shape, series and plot context. When no candidate supports a hollow marker, use candidate_id null and verdict uncertain; preserve an approximate pixel with a warning. For plus/cross markers and curve/peak queries, manual source pixels are allowed where connected ink prevents a bounded contour.
+    """
+                    try:
+                        if _is_bulk_point_request(request_data) and request_data["category"] == "plot":
+                            plan = await ground_scatter(task_runner, plan, image_path, folder, request_data['target']['explanation'])
+                        else:
+                            review = await task_runner.call(prompt=coordinate_prompt, schema=FOCUSED_REVIEW_SCHEMA,
+                                images=[str(image_path), str(draft_overlay)] + [item["path"] for item in review_tiles],
+                                workdir=worker_dir(str(folder), "coordinate-review"))
+                            _json(folder / "coordinate-review.json", review)
+                            require_contours = request_data["category"] == "plot" and (
+                                "scatter" in request_data.get("channel_description", "").lower() or _is_bulk_point_request(request_data))
+                            review = bind_review_candidates(review, source_candidates, plan["selections"] if require_contours else None,
+                                                            max_shift=60 if require_contours else None)
+                            plan, coordinate_warnings = apply_selection_review(plan, review, tuple(inspection["image_size"]))
+                            plan = await _refine_unsupported_centers(task_runner, plan, image_path, folder, require_contours)
+                        coordinate_warnings = [f"{item['label']}: {item.get('coordinate_review_note', '')}"
+                                               for item in plan["selections"] if item.get("coordinate_review") == "uncertain"]
+                        measured = await run_local(measure_selected, inspection["session_id"],
+                            x_axis, plan["selections"], y_axis,
+                            plan.get("reference_label") if request_data.get("normalization") else None,
+                            plan.get("baseline_pixel") if request_data.get("normalization") else None,
+                            False)
+                    except (LunaError, ValueError) as exc:
+                        coordinate_warnings = [f"Pixel review could not complete: {exc}. Selected measurements are retained for review."]
+                        for selection in plan["selections"]:
+                            selection["coordinate_review"] = "uncertain"
+                            selection["coordinate_review_note"] = coordinate_warnings[0]
                 measured["coordinate_review_warnings"] = coordinate_warnings
                 if coordinate_warnings:
                     await _emit(app, job_id, "review_note", "Pixel assignments needing review", notes=coordinate_warnings)
@@ -1181,6 +1207,7 @@ Engine summary: {json.dumps({k: measured.get(k) for k in ('x_axis','y_axis','bas
                   "request": request_data, "source": {"name": upload_record["original_name"],
                       "sha256": upload_record["sha256"], **target_meta},
                   "engine": job.get("engine"), "comment": comment, "inference_profile": task_runner.profile,
+                  "auxiliary_inference": plan.get("auxiliary_inference") if request_data["mode"] == "selected" else None,
                   "review_issues": list(dict.fromkeys([*calibration_warnings, *measured.get("coordinate_review_warnings", []), *measured.get("question_policy_warnings", []), *narrative_issues])),
                   "measurement": {k: measured.get(k) for k in ("implementation_id", "x_axis", "y_axis", "baseline_pixel", "reference_label", "calibration_residual_transformed", "calibration_warnings", "coordinate_review_warnings", "question_policy_warnings", "inventory_complete", "unresolved_inventory") if k in measured},
                   "overlay_path": str(overlay.relative_to(folder)), "completed_at": _now()}
@@ -1268,9 +1295,12 @@ async def _resume_selected(app: Starlette, job_id: str, question: dict[str, Any]
         if not skip:
             text = f"Question {question['id']}: {question['question']}\nUser answer: {answer}"
             evidence = await run_local(coordinate_evidence, image_path, folder / "evidence")
-            plan = await runner.call(prompt=_selected_prompt(data, inspection, text) + "\nCoordinate evidence: " + json.dumps(evidence), schema=_selected_schema(data),
-                                     images=[str(image_path)] + [item["path"] for item in evidence],
-                                     workdir=worker_dir(str(folder), f"clarification-{job.get('clarification_count', 1)}"))
+            if plan.get('scatter_beta'):
+                plan = await plan_scatter(runner, image_path, folder, data, inspection, text)
+            else:
+                plan = await runner.call(prompt=_selected_prompt(data, inspection, text) + "\nCoordinate evidence: " + json.dumps(evidence), schema=_selected_schema(data),
+                                         images=[str(image_path)] + [item["path"] for item in evidence],
+                                         workdir=worker_dir(str(folder), f"clarification-{job.get('clarification_count', 1)}"))
             if data.get("allow_agent_questions", False) and plan.get("clarifications"):
                 await _job_update(app, job_id, status="needs_input", stage="clarification", plan=plan)
                 await _emit(app, job_id, "clarification", "One more image choice needs your confirmation", questions=plan["clarifications"])

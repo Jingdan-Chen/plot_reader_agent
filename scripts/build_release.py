@@ -9,7 +9,7 @@ import shutil
 ROOT=Path(__file__).resolve().parents[1]
 TESTS=['test_agent_runtime.py','test_browser.py','test_browser_grounding.py','test_pdf_figures.py',
        'test_scatter_template_tool.py','test_scatter_templates.py','test_core.py','test_complete_plot.py','test_browser_watch.cjs',
-       'test_timing.py','test_timing_view.cjs']
+       'test_timing.py','test_timing_view.cjs','test_scatter_beta.py']
 TOP=['README.md','AGENTS.md','CLAUDE.md','pyproject.toml','uv.lock','.gitignore','plot-reader']
 SCRIPTS=['setup.py','doctor.py','build_release.py','example_plot.py']
 
@@ -20,6 +20,7 @@ def main():
     if destination.exists():raise SystemExit('Choose a new destination; existing directories are never overwritten.')
     files=[ROOT/p for p in TOP]+[ROOT/'scripts'/p for p in SCRIPTS]+[ROOT/'tests'/p for p in TESTS]
     files.append(ROOT/'experiments/scatter_templates.py')
+    files.append(ROOT/'docs/scatter-beta.md')
     for path in (ROOT/'plot_reader').rglob('*'):
         if not path.is_file() or '__pycache__' in path.parts or path.suffix=='.pyc':continue
         if path.suffix not in {'.py','.json','.toml','.html','.css','.js','.md'} and path.name!='plot-reader':continue

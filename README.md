@@ -336,6 +336,24 @@ sequenceDiagram
     Host-->>UI: Final result and downloads
 ```
 
+## Beta scatter extraction
+
+This branch offers **Beta · concurrent source review** for all-points scatter
+requests. It combines axis/layout/series setup, groups source candidates, adds
+local marker-plus-line evidence, and runs up to four independent reviews at once.
+The previous workflow remains the default while beta precision is evaluated. Both use the selected model and effort;
+complete curves continue to use the verified immutable checkpoint.
+
+**JEV image assistance** is optional and off by default. It requires
+`TYPESAFE_API_KEY` in the server environment and explicit selection in extraction
+settings. Shadow mode evaluates candidate crops alongside the agent; assist mode
+shows classifications as fallible hints. Coordinates and final acceptance remain
+with the local host and selected visual agent. JEV image input is experimental.
+Never put the API key in tracked files or browser requests.
+
+See [beta design and validation limits](docs/scatter-beta.md). Inspect coverage
+warnings and unresolved points; the beta is an experimental recognition path.
+
 ## Scatter template tool calling
 
 Repeated marker shapes can provide a useful image-space prior when fitted lines, text, and marker strokes overlap. The assistant does not draw an arbitrary convolution kernel. It selects complete marker glyphs already visible in the source legend.

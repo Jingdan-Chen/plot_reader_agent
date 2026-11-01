@@ -16,6 +16,7 @@ dependencies = [
   "python-multipart==0.0.32",
   "requests>=2.32,<3",
   "jsonschema>=4.25,<5",
+  "httpx>=0.28,<1",
 ]
 
 [project.optional-dependencies]
@@ -31,3 +32,4 @@ build-backend = "hatchling.build"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]

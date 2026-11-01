@@ -126,7 +126,10 @@ def check_claude_cli(executable: str) -> None:
 
 def action_label(workdir: str) -> str:
     name=Path(workdir).name
-    labels={'marker-layout':'Identifying plot bounds and legend exclusions',
+    labels={'scatter-setup':'Identifying axes, plot layout and marker series',
+            'scatter-coverage':'Checking source-wide marker coverage',
+            'marker-batch':'Reviewing a batch of source marker candidates',
+            'marker-layout':'Identifying plot bounds and legend exclusions',
             'marker-region':'Identifying individual markers and their series',
             'decision-':'Deciding whether a scatter-template scan will help',
             'selected-plan':'Locating the requested peaks and points',
@@ -161,8 +164,24 @@ class LunaRunner:
         self.process: asyncio.subprocess.Process | None = None
         self.last_error: str | None = None
         self.structured_output: dict | None = None
+        self.children: set[LunaRunner] = set()
+
+    def fork(self) -> LunaRunner:
+        """Independent call state with the parent's frozen inference profile."""
+        child = object.__new__(LunaRunner)
+        child.emit, child.timeout = self.emit, self.timeout
+        child.profile = dict(self.profile)
+        child.process = child.last_error = child.structured_output = None
+        child.children = set()
+        self.children.add(child)
+        return child
+
+    async def release(self, child: LunaRunner) -> None:
+        await child.cancel()
+        self.children.discard(child)
 
     async def cancel(self) -> None:
+        await asyncio.gather(*(child.cancel() for child in tuple(self.children)))
         proc = self.process
         if proc and proc.returncode is None:
             try:
@@ -222,7 +241,7 @@ class LunaRunner:
                 self.process = await asyncio.create_subprocess_exec(
                     *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE, cwd=worker,
-                    env={k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDECODE"}},
+                    env={k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDECODE", "TYPESAFE_API_KEY"}},
                     start_new_session=True)
                 stdout_task = asyncio.create_task(self._read_events(self.process.stdout, "stdout"))
                 stderr_task = asyncio.create_task(self._read_events(self.process.stderr, "stderr"))
@@ -252,6 +271,9 @@ class LunaRunner:
                     raise LunaError("LUNA returned malformed JSON") from exc
                 await self.emit({"type": "luna_completed",'message':f'Finished: {action[0].lower()+action[1:]}.','provider':profile['provider']})
                 return result
+        except asyncio.CancelledError:
+            await self.cancel()
+            raise
         finally:
             self.process = None
 

@@ -479,3 +479,27 @@ def test_chosen_effort_survives_clarification_and_all_subsequent_stages(question
     assert result['inference_profile']['effort']=='high'
     assert len(calls)>=3
     assert all(call['inference_profile']['effort_choice']=='high' for call in calls)
+
+
+@pytest.mark.parametrize('settings,valid',[
+    ({},True),({'scatter_workflow':'beta','jev_mode':'assist'},True),
+    ({'scatter_workflow':'legacy','jev_mode':'assist'},False),
+    ({'scatter_workflow':[]},False),
+    ({'scatter_workflow':'beta','jev_mode':'assist','x_positions':'20'},False),
+    ({'scatter_workflow':'beta','jev_mode':'assist','targets':'peak A'},False),
+])
+def test_experimental_workflow_opt_in_and_jev_scope(question_job,monkeypatch,settings,valid):
+    app,job_id,folder,data,plan,calls=question_job
+    browser._json(folder/'job.json',{'status':'complete'})
+    monkeypatch.setattr(browser.app.state,'token','test-local-token')
+    async def skip_run(*args,**kwargs):pass
+    monkeypatch.setattr(browser,'_run_job',skip_run)
+    body={'upload_id':data['upload_id'],'category':'plot','mode':'selected',
+          'description':'Markers with fitted lines','targets':'All data points',**settings}
+    with TestClient(browser.app,base_url='http://127.0.0.1') as client:
+        response=client.post('/api/jobs',json=body,headers={'X-Plot-Reader-Token':'test-local-token'})
+        assert response.status_code==(202 if valid else 400),response.text
+        if valid:
+            saved=browser._read(browser._job_dir(response.json()['id'])/'request.json')
+            assert saved['scatter_workflow']==settings.get('scatter_workflow','legacy')
+            assert saved['jev_mode']==settings.get('jev_mode','off')
