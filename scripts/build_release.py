@@ -8,7 +8,8 @@ import shutil
 
 ROOT=Path(__file__).resolve().parents[1]
 TESTS=['test_agent_runtime.py','test_browser.py','test_browser_grounding.py','test_pdf_figures.py',
-       'test_scatter_template_tool.py','test_scatter_templates.py','test_core.py','test_complete_plot.py','test_browser_watch.cjs']
+       'test_scatter_template_tool.py','test_scatter_templates.py','test_core.py','test_complete_plot.py','test_browser_watch.cjs',
+       'test_timing.py','test_timing_view.cjs']
 TOP=['README.md','AGENTS.md','CLAUDE.md','pyproject.toml','uv.lock','.gitignore','plot-reader']
 SCRIPTS=['setup.py','doctor.py','build_release.py','example_plot.py']
 

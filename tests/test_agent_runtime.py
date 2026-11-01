@@ -7,6 +7,7 @@ import pytest
 from PIL import Image
 from starlette.testclient import TestClient
 from plot_reader import browser,luna_runtime as runtime
+from plot_reader.timing import AnalysisTiming, current_timing
 
 SCHEMA={'type':'object','properties':{'ready':{'type':'boolean'}},'required':['ready'],'additionalProperties':False}
 
@@ -40,7 +41,18 @@ def test_provider_receives_image_exact_profile_and_validates_output(tmp_path,mon
     monkeypatch.setenv('OPENAI_API_KEY','not-forwarded');monkeypatch.setenv('CLAUDECODE','1')
     image=tmp_path/'input.png';Image.new('RGB',(96,96),'white').save(image)
     async def emit(event):events.append(event)
-    result=asyncio.run(runtime.LunaRunner(emit).call(prompt='Image task',schema=SCHEMA,images=[str(image)],workdir=str(tmp_path/'selected-plan')))
+    timing=AnalysisTiming(tmp_path/'timing')
+    token=current_timing.set(timing)
+    try:
+        result=asyncio.run(runtime.LunaRunner(emit).call(prompt='Image task',schema=SCHEMA,images=[str(image)],workdir=str(tmp_path/'selected-plan')))
+    finally:
+        current_timing.reset(token)
+    report=timing.finish()
+    assert len(report['model_calls'])==1
+    assert report['model_calls'][0]['provider']==provider
+    assert report['model_calls'][0]['name']=='selected-plan'
+    assert report['summary']['model_wait_seconds']>0
+    if provider=='claude':assert len(report['local_python_calls'])==2
     assert result=={'ready':True}
     args=calls[0]['args'];environment=calls[0]['options']['env']
     assert 'OPENAI_API_KEY' not in environment and 'CLAUDECODE' not in environment

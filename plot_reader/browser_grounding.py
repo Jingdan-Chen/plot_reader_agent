@@ -19,6 +19,7 @@ from PIL import Image, ImageDraw, ImageFont
 from scipy.ndimage import maximum_filter
 from scipy.optimize import linear_sum_assignment
 
+from .timing import run_local, local_work
 from .luna_runtime import LunaError, _json_schema, worker_dir
 from .scatter_template_tool import request_template_evidence, tile_response_evidence
 
@@ -202,7 +203,7 @@ def bind_inventory(plan: dict, candidates: list[dict], records: list[dict], seri
 
 
 async def ground_scatter(runner, plan: dict, source: Path, folder: Path, target: str) -> dict:
-    candidates=marker_candidates(source)
+    candidates=await run_local(marker_candidates,source)
     series=list(dict.fromkeys(p.get('series','Series') for p in plan['selections']))
     layout_schema=_json_schema({'plot_bounds':{'type':'array','items':{'type':'number'},'minItems':4,'maxItems':4},
         'exclude_regions':{'type':'array','items':{'type':'array','items':{'type':'number'},'minItems':4,'maxItems':4}},
@@ -228,7 +229,7 @@ async def ground_scatter(runner, plan: dict, source: Path, folder: Path, target:
                                                         folder/'scatter-template-tool',target)
     if template_result:
         candidates=candidates+template_result['candidates']
-    tiles=candidate_tiles(source,candidates,folder/'marker-evidence',local_plan)
+    tiles=await run_local(candidate_tiles,source,candidates,folder/'marker-evidence',local_plan)
     series=list(dict.fromkeys(p.get('series','Series') for p in plan['selections']))
     legends=[]
     for i,box in enumerate(local_plan.get('marker_layout',{}).get('exclude_regions',[])):
@@ -249,7 +250,7 @@ async def ground_scatter(runner, plan: dict, source: Path, folder: Path, target:
         ids=[p['id'] for p in tile['candidates']]
         template_images=[]
         if template_result:
-            template_images=[await asyncio.to_thread(tile_response_evidence,template_result,tile['bounds'],
+            template_images=[await run_local(tile_response_evidence,template_result,tile['bounds'],
                                                       folder/'marker-evidence'/f'tile-{i}-responses.png')]
         schema=_json_schema({'items':{'type':'array','items':_json_schema({
             'candidate_id':{'type':'string','enum':ids},'series_id':{'type':'string','enum':[f'S{j}' for j in range(len(series))]},
@@ -272,7 +273,7 @@ Candidate IDs and source coordinates: {json.dumps(tile['candidates'])}
                 pairs=[(p['candidate_id'],p['series_id']) for p in rec['items']]
                 if len(pairs)!=len(set(pairs)) or any(p['candidate_id'] not in ids or p['series_id'] not in {f'S{j}' for j in range(len(series))} for p in rec['items']):
                     raise ValueError('Unknown ID or duplicate assignment')
-                bound=bind_inventory({'selections':[]},tile['candidates'],[rec],series)
+                bound=local_work(bind_inventory,{'selections':[]},tile['candidates'],[rec],series)
                 if any(not (0 <= p['pixel'][0] < width and 0 <= p['pixel'][1] < height) for p in bound['selections']):
                     raise ValueError('Adjusted marker lies outside the source')
                 break
@@ -281,7 +282,7 @@ Candidate IDs and source coordinates: {json.dumps(tile['candidates'])}
                 else: prompt+='\nReturn the exact schema with unique candidate/series pairs and only allowed IDs. The last response failed validation: '+str(exc)
         records.append(rec)
         (folder/'marker-inventory.json').write_text(json.dumps(records,indent=2))
-    updated=bind_inventory(plan,candidates,records,series)
+    updated=local_work(bind_inventory,plan,candidates,records,series)
     if template_result:
         updated.setdefault('notes',[]).append('LUNA requested source-template correlation evidence. Its fixed-center proposals and local heatmaps supplemented the existing detector; response scores do not certify marker identity or completeness.')
     updated['notes'].extend(note for rec in records for note in rec.get('notes',[]))

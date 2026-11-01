@@ -39,7 +39,7 @@ an explicitly reviewed new checkpoint.
 
 ## Verify and publish
 
-Use `uv run pytest -q` and `node --test tests/test_browser_watch.cjs` for this
+Use `uv run pytest -q` and `node --test tests/test_browser_watch.cjs tests/test_timing_view.cjs` for this
 release. Run meaningful additional checks when changing provider commands,
 coordinate mapping, checkpoint handling or job recovery. Distinguish mocked
 provider tests from a live model smoke test when reporting results.

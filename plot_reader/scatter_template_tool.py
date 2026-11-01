@@ -17,6 +17,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 
+from .timing import run_local, local_work
 from .luna_runtime import LunaError, _json_schema, worker_dir
 from .scatter_templates import component_atlas, legend_components, save_evidence, scan_templates, validate_profile
 
@@ -147,7 +148,7 @@ async def request_template_evidence(runner, source: Path, layout: dict, series: 
         (folder/"tool-trace.json").write_text(json.dumps(trace, indent=2, allow_nan=False))
 
     try:
-        tool = await asyncio.to_thread(ScatterTemplateTool, source, layout, series, folder)
+        tool = await run_local(ScatterTemplateTool, source, layout, series, folder)
         if not tool.components or not tool.series:
             record({"event": "unavailable", "reason": "No isolated legend glyphs or no series; use existing local review."})
             return None
@@ -193,7 +194,7 @@ panels if any. Native response centers are fixed; matching scores are not probab
                     record({"event": "finish", "action": action, "reason": decision["reason"]})
                     return latest if action == "use_result" else None
                 await runner.emit({"type": "stage", "stage": "coordinate_review", "message": "Running source-template scatter scan"})
-                latest = await asyncio.to_thread(tool.execute, decision["tool_name"], decision["arguments"])
+                latest = await run_local(tool.execute, decision["tool_name"], decision["arguments"])
                 record({"event": "tool_result", "value": _public(latest)})
             except LunaError as exc:
                 record({"event": "fallback", "reason": str(exc)})

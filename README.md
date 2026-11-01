@@ -17,6 +17,7 @@ The visual assistant interprets the figure and chooses bounded local tools. Pyth
 - [Toolkit and calling contracts](#toolkit-and-calling-contracts)
 - [Models and runtime boundaries](#models-and-runtime-boundaries)
 - [Outputs and audit trail](#outputs-and-audit-trail)
+- [Time cost analysis](#time-cost-analysis)
 - [CLI and MCP interfaces](#cli-and-mcp-interfaces)
 - [Configuration](#configuration)
 - [Tests and verification](#tests-and-verification)
@@ -32,6 +33,7 @@ The visual assistant interprets the figure and chooses bounded local tools. Pyth
 - Provides defaults when the feature description is blank, including “All data points” for scatter plots.
 - Shows the optional NMR nucleus control only for NMR.
 - Displays the latest assistant/workflow action in a compact box beside the source figure.
+- Ends each new analysis with measured total time, model response waits, workflow stage times, and the wall time of each local Python tool call.
 - Preserves uncertain or unresolved measurements, independent axis checks, numerical uncertainty, and the source-pixel locations used to calculate the table.
 - Supports explicit point corrections after a selected-measurement run and saves them as a separate result.
 
@@ -270,6 +272,7 @@ flowchart TD
     CE --> J[Assistant reviews numerical results]
     X --> J
     J --> OUT[Table, overlay, JSON, warnings and evidence]
+    OUT --> TIME[Host timing summary, stages and individual tool wall times]
 ```
 
 ### Selected-feature progress
@@ -441,6 +444,8 @@ artifacts/browser/
   jobs/<job-id>/
     job.json                    # durable status and latest action
     request.json                # effective request and selected target
+    timing.json                 # timing summary, stages and individual calls
+    _timing-state.json          # internal timing state for clarification resumes
     source-image.png            # exact measurement image
     events.jsonl                # progress/evidence events
     worker/<stage>/
@@ -451,6 +456,28 @@ artifacts/browser/
 ```
 
 The browser offers CSV, JSON, and overlay downloads. Intermediate filenames vary by the selected path; scatter runs can include marker layouts, candidate inventories, glyph atlases, response maps and `tool-trace.json`. Complete extraction retains the plan and local validation/extraction outputs.
+
+## Time cost analysis
+
+Every new browser analysis ends with a **Time cost analysis** section. It uses the Python host's monotonic `perf_counter` clock for both inference backends. The assistant does not estimate these numbers. Values are wall times in seconds, displayed to three decimal places.
+
+| Summary row | What it measures |
+| --- | --- |
+| Total elapsed | From the start of the analysis task through preparation of the result and CSV, including pauses for clarification |
+| Waiting for model responses | Every inference CLI round trip until a structured response is validated, including failed attempts and repairs |
+| Local Python work | The union of timed local tool calls and complete-curve Python subprocesses |
+| Waiting for your clarification | Time paused for a requested user answer, including the interval before the resume task starts |
+| Other host work and scheduling | Remaining time, including thread scheduling, small host operations, event handling and saving intermediate artifacts |
+
+The four categories below total partition the elapsed time. The workflow-stage table gives inclusive wall times and their model-wait and Python portions: preparation, inspection/planning, selected measurements, source-coordinate review, complete-curve planning/validation/extraction, clarification handling, and final review. Repeated visits to the same stage are combined. The expandable model-response table lists every actual call by its worker-stage name and status. The local Python table lists each call separately, including repeated measurements, source crops/overlays, marker detection, template preparation/scans, and curve-engine validation/extraction.
+
+**Do not add stage or individual-call rows to the summary:** they describe the same elapsed work. Nested or concurrent local calls may overlap, so their individual durations can sum to more than the local-work summary. The summary removes overlaps; model-wait intervals take precedence if categories overlap.
+
+Model wait includes CLI startup, image transfer, provider queueing, inference, and response validation. The host cannot split those into server-only inference and network time. A local tool's time starts inside its Python worker, so thread queueing belongs to host overhead. Complete-engine subprocess timing includes process startup and child work; local OCR timing includes Tesseract where called. These are elapsed wall times, not CPU time or model billing metrics.
+
+The analysis boundary excludes upload, PDF figure discovery, time spent configuring the request, browser rendering, downloads, and serialization/delivery of the final timing report itself. PDF OCR retains its separate intake report and timings. Clarification resumes retain the original timing record and include the waiting interval. Explicit restarts start a fresh analysis record. Saving corrected points starts a fresh local recalculation record with zero model calls and does not inherit the parent's timings.
+
+`result.json` includes a `timing` object with `summary`, `stages`, `model_calls`, and `local_python_calls`. The same object is available as a separate **Timing JSON** download; individual records retain start/end offsets, durations, stage, and completion/failure/cancellation status. Timings are also saved for stopped or failed tasks in their local job folder. Existing saved results show “Timing was not recorded” rather than invented estimates. Timers record host actions and durations, never raw model reasoning or prompts.
 
 Axis calibration requires observed anchors and independent checks. Unsupported axes can remain uncalibrated. Measurements retain source coordinates and uncertainty; warnings or individually unresolved points should be reviewed rather than replaced with invented values.
 
@@ -516,7 +543,7 @@ From a clean clone:
 uv sync --extra test
 uv run pytest -q
 node --check plot_reader/browser_ui/app.js
-node --test tests/test_browser_watch.cjs
+node --test tests/test_browser_watch.cjs tests/test_timing_view.cjs
 ```
 
 Node is needed for JavaScript tests, not for serving the browser assets. Inference CLIs may have their own Node/runtime installation requirements.

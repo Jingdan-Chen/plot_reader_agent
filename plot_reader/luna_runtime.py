@@ -18,6 +18,7 @@ import subprocess
 from typing import Any, Awaitable, Callable
 from PIL import Image
 from jsonschema import Draft202012Validator, ValidationError
+from .timing import run_local, timing_span
 
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
@@ -173,7 +174,7 @@ class LunaRunner:
         if not executable:
             raise LunaError(f"{profile['provider']} CLI is unavailable on PATH")
         if profile['provider']=='claude':
-            await asyncio.to_thread(check_claude_cli,executable)
+            await run_local(check_claude_cli,executable)
         worker = Path(workdir).resolve()
         worker.mkdir(parents=True, exist_ok=True)
         schema_path = worker / "response.schema.json"
@@ -200,44 +201,45 @@ class LunaRunner:
                 '--json-schema',json.dumps(schema),'--tools','','--restricted',
                 '--strict-mcp-config','--mcp-config','{"mcpServers":{}}',
                 '--setting-sources','','--no-session-persistence']
-            payload=await asyncio.to_thread(claude_input,prompt,images)
+            payload=await run_local(claude_input,prompt,images)
         action=action_label(workdir)
         await self.emit({"type": "luna_started",'message':action,'provider':profile['provider']})
         (worker/'inference.json').write_text(json.dumps(profile,indent=2)+'\n')
         try:
-            self.process = await asyncio.create_subprocess_exec(
-                *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE, cwd=worker,
-                env={k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDECODE"}},
-                start_new_session=True)
-            stdout_task = asyncio.create_task(self._read_events(self.process.stdout, "stdout"))
-            stderr_task = asyncio.create_task(self._read_events(self.process.stderr, "stderr"))
-            assert self.process.stdin is not None
-            self.process.stdin.write(payload)
-            await self.process.stdin.drain()
-            self.process.stdin.close()
-            try:
-                code = await asyncio.wait_for(self.process.wait(), self.timeout)
-            except asyncio.TimeoutError as exc:
-                await self.cancel()
-                raise LunaError("LUNA response timed out") from exc
-            await asyncio.gather(stdout_task, stderr_task)
-            if code != 0:
-                detail = f": {self.last_error}" if self.last_error else "; see run events"
-                raise LunaError(f"{profile['name']} exited with status {code}{detail}")
-            if profile['provider']=='claude' and self.structured_output is not None:
-                response_path.write_text(json.dumps(self.structured_output,allow_nan=False))
-            if not response_path.is_file():
-                raise LunaError("LUNA did not return the required structured response")
-            try:
-                result = json.loads(response_path.read_text())
-                Draft202012Validator(schema).validate(result)
-            except ValidationError as exc:
-                raise LunaError(f"{profile['name']} returned a response that violates the required schema: {exc.message[:200]}") from None
-            except (OSError, json.JSONDecodeError) as exc:
-                raise LunaError("LUNA returned malformed JSON") from exc
-            await self.emit({"type": "luna_completed",'message':f'Finished: {action[0].lower()+action[1:]}.','provider':profile['provider']})
-            return result
+            with timing_span("model_wait", worker.name, provider=profile["provider"], model=profile["model"]):
+                self.process = await asyncio.create_subprocess_exec(
+                    *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE, cwd=worker,
+                    env={k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDECODE"}},
+                    start_new_session=True)
+                stdout_task = asyncio.create_task(self._read_events(self.process.stdout, "stdout"))
+                stderr_task = asyncio.create_task(self._read_events(self.process.stderr, "stderr"))
+                assert self.process.stdin is not None
+                self.process.stdin.write(payload)
+                await self.process.stdin.drain()
+                self.process.stdin.close()
+                try:
+                    code = await asyncio.wait_for(self.process.wait(), self.timeout)
+                except asyncio.TimeoutError as exc:
+                    await self.cancel()
+                    raise LunaError("LUNA response timed out") from exc
+                await asyncio.gather(stdout_task, stderr_task)
+                if code != 0:
+                    detail = f": {self.last_error}" if self.last_error else "; see run events"
+                    raise LunaError(f"{profile['name']} exited with status {code}{detail}")
+                if profile['provider']=='claude' and self.structured_output is not None:
+                    response_path.write_text(json.dumps(self.structured_output,allow_nan=False))
+                if not response_path.is_file():
+                    raise LunaError("LUNA did not return the required structured response")
+                try:
+                    result = json.loads(response_path.read_text())
+                    Draft202012Validator(schema).validate(result)
+                except ValidationError as exc:
+                    raise LunaError(f"{profile['name']} returned a response that violates the required schema: {exc.message[:200]}") from None
+                except (OSError, json.JSONDecodeError) as exc:
+                    raise LunaError("LUNA returned malformed JSON") from exc
+                await self.emit({"type": "luna_completed",'message':f'Finished: {action[0].lower()+action[1:]}.','provider':profile['provider']})
+                return result
         finally:
             self.process = None
 

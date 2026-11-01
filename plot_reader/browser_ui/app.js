@@ -258,7 +258,7 @@
       await followJob(job.id);
     } catch (err) { showError(err.message); $('#begin-extraction').disabled = false; }
   });
-  const stageText = {queued:'In the extraction queue',prepare:'Preparing confirmed figure',inspect:'Inspecting ticks and feature candidates',measure:'Measuring selected features locally',coordinate_review:'Checking selected pixels against the source',complete_plan:'Planning panels and series',review:'Reviewing output and writing explanation',clarification:'Waiting for your image review'};
+  const stageText = {queued:'In the extraction queue',prepare:'Preparing confirmed figure',inspect:'Inspecting ticks and feature candidates',measure:'Measuring selected features locally',coordinate_review:'Checking selected pixels against the source',complete_plan:'Planning panels and series',complete_validate:'Validating the curve plan locally',complete_extract:'Extracting complete curves locally',review:'Reviewing output and writing explanation',clarification:'Waiting for your image review'};
   const followJob = async jobId => {
     state.jobWatch?.stop(); state.eventSource?.close(); state.jobId=jobId;
     showError('');
@@ -284,7 +284,7 @@
   };
   const updateProgress = (stage, status) => {
     $('#progress-title').textContent = stageText[stage] || 'Processing figure'; $('#progress-status').textContent = String(status || 'RUNNING').toUpperCase();
-    const pct = ({queued:8,prepare:20,inspect:32,complete_plan:36,measure:61,coordinate_review:70,review:88,clarification:45})[stage] || 54;
+    const pct = ({queued:8,prepare:20,inspect:32,complete_plan:36,complete_validate:48,complete_extract:61,measure:61,coordinate_review:70,review:88,clarification:45})[stage] || 54;
     $('#progress-bar').style.width = `${pct}%`; $('#progress-detail').textContent = 'The assistant interprets the image; the local engine calculates coordinates and uncertainty.';
   };
   const renderClarification = questions => {
@@ -327,7 +327,7 @@
     const table = `<div class="table-wrap"><table><thead><tr>${head.map(c=>`<th>${esc(c)}</th>`).join('')}</tr></thead><tbody>${rows.map(row=>`<tr>${cols.map(k=>`<td class="${['unresolved','needs_review'].includes(row.status)?'unresolved':''}">${k==='status'&&['unresolved','needs_review'].includes(row[k])?'Needs review':k==='height_relative'&&row[k]!=null?fmt(row[k]):(row[k] == null || row[k] === '' ? '—' : esc(k==='x_unit'||k==='y_unit'?row[k]:typeof row[k]==='number'?fmt(row[k]):row[k]))}</td>`).join('')}</tr>`).join('')}</tbody></table></div>`;
     const imageUrl = authed(`/api/jobs/${job.id}/artifact/overlay.png`);
     const issues = (result.review_issues||[]).length ? `<div class="result-issues">Review notes: ${result.review_issues.map(esc).join(' · ')}</div>` : '';
-    $('#result-view').innerHTML = `${exp}<div id="point-review"></div><div class="eyebrow result-eyebrow">MEASUREMENTS · ${rows.length} ROWS</div>${table}<button id="copy-table" class="copy-button" type="button">▣ Copy table</button><div class="result-comment">${esc(result.comment)}</div>${issues}<div class="result-image"><img src="${imageUrl}" alt="Annotated plot measurement overlay"></div><div class="download-row"><a href="${authed(`/api/jobs/${job.id}/artifact/table.csv`)}">↓ CSV</a><a href="${authed(`/api/jobs/${job.id}/artifact/result.json`)}">↓ JSON</a><a href="${imageUrl}" download="plot-reader-overlay.png">↓ Overlay</a></div><details class="provenance"><summary>Measurement details and source pixels</summary><pre>${esc(JSON.stringify(result.measurement,null,2))}</pre></details>`;
+    $('#result-view').innerHTML = `${exp}<div id="point-review"></div><div class="eyebrow result-eyebrow">MEASUREMENTS · ${rows.length} ROWS</div>${table}<button id="copy-table" class="copy-button" type="button">▣ Copy table</button><div class="result-comment">${esc(result.comment)}</div>${issues}<div class="result-image"><img src="${imageUrl}" alt="Annotated plot measurement overlay"></div><div class="download-row"><a href="${authed(`/api/jobs/${job.id}/artifact/table.csv`)}">↓ CSV</a><a href="${authed(`/api/jobs/${job.id}/artifact/result.json`)}">↓ JSON</a><a href="${imageUrl}" download="plot-reader-overlay.png">↓ Overlay</a></div><details class="provenance"><summary>Measurement details and source pixels</summary><pre>${esc(JSON.stringify(result.measurement,null,2))}</pre></details>${PlotReaderTiming.render(result.timing, authed(`/api/jobs/${job.id}/artifact/timing.json`))}`;
     if (!result.experimental) renderPointReview(job, result);
     $('#copy-table').addEventListener('click', async () => {
       const tsv = [cols.join('\t'), ...rows.map(row => cols.map(k => row[k] == null ? '' : String(k==='pixel'&&Array.isArray(row[k])?JSON.stringify(row[k]):row[k]).replace(/[\t\n]/g,' ')).join('\t'))].join('\n');

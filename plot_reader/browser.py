@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import csv
 from contextlib import asynccontextmanager
+from functools import wraps
 import hashlib
 import html
 import io
@@ -33,6 +34,7 @@ import uvicorn
 from . import core
 from .browser_measurement import measure_selected
 from .browser_grounding import ground_scatter
+from .timing import AnalysisTiming, current_timing, run_local, local_work, timing_span
 from .pdf_figures import FigureIntakeError, extract_figures, page_range, sanitize
 from .browser_evidence import (coordinate_evidence, selection_overlay,
                                apply_selection_review, unsupported_centers, focused_marker_candidates, unique_selection_labels,
@@ -288,7 +290,7 @@ async def upload(request: Request) -> Response:
                               "created_at": _now(), "bytes": len(raw)}
     try:
         if record["kind"] == "pdf":
-            count = await asyncio.to_thread(_pdf_page_count, path)
+            count = await run_local(_pdf_page_count, path)
             record.update({"page_count": count, "requires_page_range": count > 10,
                            "page_candidates": []})
         else:
@@ -438,7 +440,7 @@ async def render_page(request: Request) -> Response:
             raise ValueError("Page is outside this PDF")
         path = _upload_dir(source["id"]) / f"page-{page}.png"
         if not path.is_file():
-            await asyncio.to_thread(_render_pdf_page, _upload_dir(source["id"]) / source["filename"], path, 70)
+            await run_local(_render_pdf_page, _upload_dir(source["id"]) / source["filename"], path, 70)
         if not any(item["page"] == page for item in source["page_candidates"]):
             source["page_candidates"].append({"page": page, "score": 0, "caption": ""})
         _json(_upload_dir(source["id"]) / "source.json", source)
@@ -560,6 +562,9 @@ async def _emit(app: Starlette, job_id: str, kind: str, message: str = "", **ext
 
 
 async def _job_update(app: Starlette, job_id: str, **changes: Any) -> dict[str, Any]:
+    recorder = current_timing.get()
+    if recorder is not None and recorder.folder == _job_dir(job_id) and changes.get("stage"):
+        recorder.set_stage("user_wait" if changes.get("status") == "needs_input" else changes["stage"])
     path = _job_dir(job_id) / "job.json"
     job = _read(path)
     job.update(changes, updated_at=_now())
@@ -728,31 +733,36 @@ def _write_outputs(folder: Path, rows: list[dict[str, Any]], result: dict[str, A
             writer.writerow({**row, "pixel": json.dumps(row["pixel"], separators=(",", ":")) if row["pixel"] is not None else ""})
     result["rows"] = rows
     result["csv_path"] = "table.csv"
+    recorder = current_timing.get()
+    if recorder is not None and recorder.folder == folder:
+        result["timing"] = recorder.finish()
     _json(folder / "result.json", result)
 
 
 async def _run_subprocess(app: Starlette, job_id: str, command: list[str],
                           *, timeout: int = 180, env: dict[str, str] | None = None,
                           cwd: str | None = None) -> subprocess.CompletedProcess[str]:
-    await _emit(app, job_id, "engine_started", "Running local measurement engine")
-    proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE,
-                                                stderr=asyncio.subprocess.PIPE, cwd=cwd, env=env,
-                                                start_new_session=True)
-    app.state.processes[job_id] = proc
-    try:
-        stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
-    except asyncio.TimeoutError:
-        os.killpg(proc.pid, signal.SIGTERM)
-        raise RuntimeError("Local extraction timed out")
-    except asyncio.CancelledError:
-        if proc.returncode is None:
+    label = "checkpoint.validate" if "validate" in command else "checkpoint.extract"
+    with timing_span("local_python", label):
+        await _emit(app, job_id, "engine_started", "Running local measurement engine")
+        proc = await asyncio.create_subprocess_exec(*command, stdout=asyncio.subprocess.PIPE,
+                                                    stderr=asyncio.subprocess.PIPE, cwd=cwd, env=env,
+                                                    start_new_session=True)
+        app.state.processes[job_id] = proc
+        try:
+            stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout)
+        except asyncio.TimeoutError:
             os.killpg(proc.pid, signal.SIGTERM)
-        raise
-    finally:
-        app.state.processes.pop(job_id, None)
-    if proc.returncode:
-        raise RuntimeError(stderr.decode("utf-8", "replace")[-3000:] or "Local extraction failed")
-    return subprocess.CompletedProcess(command, proc.returncode, stdout.decode(), stderr.decode())
+            raise RuntimeError("Local extraction timed out")
+        except asyncio.CancelledError:
+            if proc.returncode is None:
+                os.killpg(proc.pid, signal.SIGTERM)
+            raise
+        finally:
+            app.state.processes.pop(job_id, None)
+        if proc.returncode:
+            raise RuntimeError(stderr.decode("utf-8", "replace")[-3000:] or "Local extraction failed")
+        return subprocess.CompletedProcess(command, proc.returncode, stdout.decode(), stderr.decode())
 
 
 async def _complete_extract(app: Starlette, job_id: str, folder: Path,
@@ -791,14 +801,17 @@ This is the experimental complete-curves workflow. Do not generate dense coordin
     command = [sys.executable, "-m", "plot_reader.dispatch", "--profile", "experimental",
                "validate", str(image_path), "--plan", str(plan_path)]
     env = {**os.environ, "PYTHONPATH": str(snapshot)}
+    await _job_update(app, job_id, stage="complete_validate")
     validate = await _run_subprocess(app, job_id, command, timeout=180,
                                      env={**os.environ, "PYTHONPATH": str(snapshot)}, cwd=str(snapshot))
     validation = json.loads(validate.stdout)
     if validation.get("errors"):
+        await _job_update(app, job_id, stage="complete_plan")
         repair_prompt = prompt + "\nCorrect these local validation errors using only the attached image: " + json.dumps(validation["errors"])
         plan = await runner.call(prompt=repair_prompt, schema=schema, images=[str(image_path)],
                                  workdir=worker_dir(str(folder), "complete-repair"))
         _json(plan_path, plan)
+        await _job_update(app, job_id, stage="complete_validate")
         validation = json.loads((await _run_subprocess(app, job_id, command, timeout=180,
                                     env={**os.environ, "PYTHONPATH": str(snapshot)}, cwd=str(snapshot))).stdout)
         if validation.get("errors"):
@@ -808,6 +821,7 @@ This is the experimental complete-curves workflow. Do not generate dense coordin
     output.mkdir(exist_ok=True)
     command = [sys.executable, '-m', 'plot_reader.dispatch', '--profile', 'experimental',
                'extract', str(image_path), '--plan', str(plan_path), '--output', str(output)]
+    await _job_update(app, job_id, stage="complete_extract")
     await _run_subprocess(app, job_id, command, timeout=900,env=env,cwd=str(snapshot))
     result = _read(output / "result.json")
     result["result_path"] = str(output / "result.json")
@@ -816,7 +830,7 @@ This is the experimental complete-curves workflow. Do not generate dense coordin
 
 async def _refine_unsupported_centers(runner: LunaRunner, plan: dict[str, Any],
                                       source: Path, folder: Path, require_contours: bool = False) -> dict[str, Any]:
-    issues = await asyncio.to_thread(unsupported_centers, plan, source)
+    issues = await run_local(unsupported_centers, plan, source)
     size = Image.open(source).size
     selected = plan["selections"]
     for index, item in enumerate(selected):
@@ -836,9 +850,9 @@ async def _refine_unsupported_centers(runner: LunaRunner, plan: dict[str, Any],
         return plan
     _json(folder / "pixel-support.json", issues)
     focus = issues[:6]
-    evidence = await asyncio.to_thread(coordinate_evidence, source, folder / "focused-evidence",
+    evidence = await run_local(coordinate_evidence, source, folder / "focused-evidence",
                                       boxes=[tuple(item["bounds"]) for item in focus], spacing=25)
-    candidates = await asyncio.to_thread(focused_marker_candidates, source, evidence)
+    candidates = await run_local(focused_marker_candidates, source, evidence)
     _json(folder / "focused-candidates.json", {"candidates": candidates, "evidence": evidence})
     subset = {"selections": [plan["selections"][item["selection_index"]] for item in focus]}
     records = [{**item, "selection_id": str(index)} for index, item in enumerate(subset["selections"], 1)]
@@ -860,7 +874,7 @@ Purple C IDs identify source-measured contour centers. Prefer candidate_id for t
             plan["selections"][issue["selection_index"]] = selection
     except (LunaError, ValueError) as exc:
         _json(folder / "coordinate-refinement-error.json", {"error": str(exc)})
-    remaining = await asyncio.to_thread(unsupported_centers, plan, source)
+    remaining = await run_local(unsupported_centers, plan, source)
     for item in remaining:
         selection = plan["selections"][item["selection_index"]]
         selection["coordinate_review"] = "uncertain"
@@ -870,6 +884,31 @@ Purple C IDs identify source-measured contour centers. Prefer candidate_id for t
     return plan
 
 
+def _timed_job(function):
+    @wraps(function)
+    async def wrapped(app, job_id, *args, **kwargs):
+        folder = _job_dir(job_id)
+        parent = current_timing.get()
+        if parent is not None and parent.folder == folder:
+            return await function(app, job_id, *args, **kwargs)
+        recorder = AnalysisTiming(folder)
+        token = current_timing.set(recorder)
+        try:
+            return await function(app, job_id, *args, **kwargs)
+        finally:
+            try:
+                status = _read(folder / "job.json").get("status")
+                if status == "needs_input":
+                    recorder.set_stage("user_wait")
+                    recorder.save()
+                else:
+                    recorder.finish()
+            finally:
+                current_timing.reset(token)
+    return wrapped
+
+
+@_timed_job
 async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | None = None) -> None:
     folder = _job_dir(job_id)
     job = _read(folder / "job.json")
@@ -885,7 +924,7 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
         await _job_update(app, job_id, status="running", stage="prepare")
         await _emit(app, job_id, "stage", "Preparing confirmed figure", stage="prepare")
         image_path = folder / "source-image.png"
-        target_meta = await asyncio.to_thread(_page_manifest, request_data, image_path)
+        target_meta = await run_local(_page_manifest, request_data, image_path)
         upload_record = _read(_upload_dir(request_data["upload_id"]) / "source.json")
         inspection: dict[str, Any] = {}
         if request_data["mode"] == "selected":
@@ -895,14 +934,14 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
                 inspection = _read(folder / "inspection.json")
             else:
                 labels = _candidate_labels(request_data)
-                inspection = await asyncio.to_thread(core.inspect_plot, str(image_path),
+                inspection = await run_local(core.inspect_plot, str(image_path),
                                                       request_data.get("targets") or "requested plot features", labels or None)
                 _json(folder / "inspection.json", inspection)
         task_runner = LunaRunner(emit)
         app.state.runners[job_id] = task_runner
         calibration_warnings: list[str] = []
         if request_data["mode"] == "selected":
-            evidence = await asyncio.to_thread(coordinate_evidence, image_path, folder / "evidence")
+            evidence = await run_local(coordinate_evidence, image_path, folder / "evidence")
             _json(folder / "evidence.json", evidence)
             review_images = list(dict.fromkeys(x for x in inspection.get("review_image_paths", [])
                                 if x != inspection.get("overview_path") and Path(x).is_file()))[:4]
@@ -953,7 +992,7 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
                 request_data["x_unit"] = plan["x_axis"].get("unit")
                 request_data["y_unit"] = plan.get("y_axis", {}).get("unit") if plan.get("y_axis") else None
                 _json(folder / "request.json", request_data)
-                measured = await asyncio.to_thread(measure_selected, inspection["session_id"],
+                measured = await run_local(measure_selected, inspection["session_id"],
                                                    x_axis, plan["selections"], y_axis,
                                                    plan.get("reference_label") if request_data.get("normalization") else None,
                                                    plan.get("baseline_pixel") if request_data.get("normalization") else None,
@@ -966,10 +1005,10 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
                                    "pixel": draft_points.get(item["label"], {}).get("pixel") or item.get("pixel")}
                                   for index, item in enumerate(plan["selections"], 1)]
                 draft_overlay = folder / "draft-selections.png"
-                await asyncio.to_thread(selection_overlay, image_path, review_records, draft_overlay)
-                reviewed_evidence = await asyncio.to_thread(coordinate_evidence, image_path, folder / "review-evidence")
+                await run_local(selection_overlay, image_path, review_records, draft_overlay)
+                reviewed_evidence = await run_local(coordinate_evidence, image_path, folder / "review-evidence")
                 review_tiles = reviewed_evidence[1:] or reviewed_evidence
-                source_candidates = await asyncio.to_thread(focused_marker_candidates, image_path, review_tiles, 1)
+                source_candidates = await run_local(focused_marker_candidates, image_path, review_tiles, 1)
                 _json(folder / "review-candidates.json", {"candidates": source_candidates, "evidence": review_tiles})
                 coordinate_prompt = f"""Audit EACH numbered marker location against the unannotated source and coordinate-grid crops. The second image is a DRAFT overlay with selection IDs, not ground truth. Blue grid labels are ORIGINAL source pixels (x right, y DOWN); never return crop-relative coordinates. Automatic candidates and plot bounds may be wrong. Legend entries, axis ink, text, blank space, and fitted-curve ink are not experimental marker centers. Identify the requested marker SHAPE and series before choosing its center. Inspect every item independently; shared time positions do not establish y. Correct obvious mislocations by reading the actual marker center against the source grid, including points mistakenly over the legend. Do not interpolate a curve or invent a point at an assumed time. Preserve overlapping-marker uncertainty; an approximate visible center may be retained with verdict uncertain and a clear reason. Return each selection_id exactly once. confirmed/corrected require the reviewed ORIGINAL pixel. uncertain may use a supported approximate pixel or null if no position can be read. Do not change data values or calibrations; the host computes numbers from reviewed pixels.
 User target: {request_data['target']['explanation']}
@@ -995,7 +1034,7 @@ Purple C IDs in the crop images mark source-measured contour centers. For hollow
                         plan = await _refine_unsupported_centers(task_runner, plan, image_path, folder, require_contours)
                     coordinate_warnings = [f"{item['label']}: {item.get('coordinate_review_note', '')}"
                                            for item in plan["selections"] if item.get("coordinate_review") == "uncertain"]
-                    measured = await asyncio.to_thread(measure_selected, inspection["session_id"],
+                    measured = await run_local(measure_selected, inspection["session_id"],
                         x_axis, plan["selections"], y_axis,
                         plan.get("reference_label") if request_data.get("normalization") else None,
                         plan.get("baseline_pixel") if request_data.get("normalization") else None,
@@ -1025,7 +1064,7 @@ Purple C IDs in the crop images mark source-measured contour centers. For hollow
             _json(folder / "engine-result.json", measured)
             rows = _flatten_selected(measured, request_data, target_meta, "")
             overlay = folder / "annotated.png"
-            await asyncio.to_thread(selection_overlay, image_path, measured.get("points", []), overlay)
+            await run_local(selection_overlay, image_path, measured.get("points", []), overlay)
         else:
             await _job_update(app, job_id, stage="complete_plan")
             await _emit(app, job_id, "stage", "Planning all panels and series", stage="complete_plan")
@@ -1134,6 +1173,7 @@ async def answer_clarification(request: Request) -> Response:
         return _form_error(str(exc))
 
 
+@_timed_job
 async def _resume_selected(app: Starlette, job_id: str, question: dict[str, Any],
                            answer: str, skip: bool) -> None:
     folder = _job_dir(job_id)
@@ -1152,7 +1192,7 @@ async def _resume_selected(app: Starlette, job_id: str, question: dict[str, Any]
         await _job_update(app, job_id, status="running", stage="clarification")
         if not skip:
             text = f"Question {question['id']}: {question['question']}\nUser answer: {answer}"
-            evidence = await asyncio.to_thread(coordinate_evidence, image_path, folder / "evidence")
+            evidence = await run_local(coordinate_evidence, image_path, folder / "evidence")
             plan = await runner.call(prompt=_selected_prompt(data, inspection, text) + "\nCoordinate evidence: " + json.dumps(evidence), schema=SELECTED_SCHEMA,
                                      images=[str(image_path)] + [item["path"] for item in evidence],
                                      workdir=worker_dir(str(folder), f"clarification-{job.get('clarification_count', 1)}"))
@@ -1224,7 +1264,7 @@ async def restart_job(request: Request) -> Response:
         if data.get("mode") == "selected" and old.get("plan"):
             try:
                 inspection = _read(_job_dir(old_id) / "inspection.json")
-                await asyncio.to_thread(core._read_session, inspection["session_id"])
+                await run_local(core._read_session, inspection["session_id"])
                 _json(folder / "inspection.json", inspection)
                 resumed_plan = old["plan"]
             except (ValueError, KeyError, OSError):
@@ -1244,6 +1284,7 @@ async def correct_points(request: Request) -> Response:
     """Explicit local edits create a new measured revision; no inference runs."""
     if not await _auth_route(request):
         return _form_error("Local session expired", 403)
+    correction_token = None
     try:
         if any(not task.done() for task in request.app.state.tasks.values()):
             return _form_error("Wait for the active extraction before saving corrections", 409)
@@ -1301,9 +1342,14 @@ async def correct_points(request: Request) -> Response:
                 'coordinate_review':'uncertain' if addition.get('uncertain') else 'corrected','coordinate_review_note':str(addition.get('note') or 'Visible marker added during explicit source-image review')[:1500]}
             plan['selections'].append(selection);labels[label]=selection
         if not plan['selections']: raise ValueError('A result must retain at least one feature')
+        new_id = uuid.uuid4().hex
+        folder = _job_dir(new_id)
+        recorder = AnalysisTiming(folder)
+        correction_token = current_timing.set(recorder)
+        recorder.set_stage("correct_points")
         inspection = _read(old_folder / 'inspection.json')
-        await asyncio.to_thread(core._read_session, inspection['session_id'])
-        measured = await asyncio.to_thread(measure_selected, inspection['session_id'], plan['x_axis'],
+        await run_local(core._read_session, inspection['session_id'])
+        measured = await run_local(measure_selected, inspection['session_id'], plan['x_axis'],
             plan['selections'], plan.get('y_axis'), plan.get('reference_label') if data.get('normalization') else None,
             plan.get('baseline_pixel') if data.get('normalization') else None, False)
         for i, point in enumerate(measured['points'], 1):
@@ -1314,13 +1360,11 @@ async def correct_points(request: Request) -> Response:
                 point.update(status='needs_review',reason=selection.get('coordinate_review_note'))
         warnings = [p.get('coordinate_review_note','Uncertain feature') for p in plan['selections'] if p.get('coordinate_review')=='uncertain']
         measured['coordinate_review_warnings'] = warnings
-        new_id = uuid.uuid4().hex
-        folder = _job_dir(new_id); folder.mkdir(parents=True)
         shutil.copy2(old_folder / 'source-image.png', folder / 'source-image.png')
         _json(folder/'inspection.json', inspection); _json(folder/'request.json', data)
         _json(folder/'plan.json', plan); _json(folder/'engine-result.json', measured)
         _json(folder/'corrections.json', {'parent':old_id,'edits':edits,'additions':additions,'inference_used':False})
-        selection_overlay(folder/'source-image.png', measured['points'], folder/'annotated.png')
+        local_work(selection_overlay,folder/'source-image.png', measured['points'], folder/'annotated.png')
         previous = _read(old_folder/'result.json')
         rows = _flatten_selected(measured,data,previous.get('source',{}),'')
         comment = (f"Saved {len(edits)} source-image corrections and {len(additions)} added markers. The frozen measurement engine recalculated the table from the saved source pixels using the existing "
@@ -1337,6 +1381,12 @@ async def correct_points(request: Request) -> Response:
         return JSONResponse({'id':new_id,'status':'complete','corrected_from':old_id},status_code=201)
     except (ValueError,KeyError,TypeError,OSError,json.JSONDecodeError) as exc:
         return _form_error(str(exc))
+    finally:
+        if correction_token is not None:
+            try:
+                recorder.finish()
+            finally:
+                current_timing.reset(correction_token)
 
 
 async def history(request: Request) -> Response:
@@ -1372,6 +1422,7 @@ async def artifact(request: Request) -> Response:
         folder = _job_dir(request.path_params["job_id"])
         name = request.path_params["name"]
         allowed = {"table.csv": "text/csv", "result.json": "application/json",
+                   "timing.json": "application/json",
                    "engine-result.json": "application/json", "plan.json": "application/json",
                    "overlay.png": "image/png", "source-image.png": "image/png"}
         if name not in allowed:
