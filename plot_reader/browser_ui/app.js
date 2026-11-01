@@ -194,11 +194,13 @@
     $('#feature-targets').placeholder = fallback;
     $('#feature-default-hint').textContent = `Optional. Leave blank to use: ${fallback}.`;
   };
-  $('#plot-kind').addEventListener('change', updateTargetHint);
+  $('#plot-kind').addEventListener('change', () => updateModeFields());
   $('#spectrum-type').addEventListener('change', () => updateModeFields());
-  $('#x-positions').addEventListener('input', updateTargetHint);
+  $('#x-positions').addEventListener('input', () => updateModeFields());
   const updateModeFields = () => {
     const selected = state.mode === 'selected';
+    const scatterEligible = selected && state.category === 'plot' && !$('#x-positions').value.trim();
+    $('#scatter-settings').classList.toggle('hidden', !scatterEligible);
     const isNMR = state.category === 'spectroscopy' && $('#spectrum-type').value === 'NMR';
     $('#nmr-options').classList.toggle('hidden', !isNMR);
     $('#nmr-nucleus').disabled = !isNMR;
@@ -209,6 +211,7 @@
     updateTargetHint();
   };
   $('#normalize').addEventListener('change', updateModeFields);
+  $('#scatter-workflow').addEventListener('change', updateModeFields);
   const updateEffortDisplay = () => {
     $('#assistant-profile').textContent = $('#model-effort').selectedOptions[0].dataset.profileLabel;
   };
@@ -220,7 +223,7 @@
     const spectrum = $('#spectrum-type').value;
     const isNMR = state.category === 'spectroscopy' && spectrum === 'NMR';
     const channel = state.category === 'spectroscopy' ? `${spectrum}${isNMR && $('#nmr-nucleus').value ? ` · ${$('#nmr-nucleus').value}` : ''}` : state.category === 'plot' ? $('#plot-kind').value : $('#channel-description').value.trim();
-    return {channel, mode: state.mode, targets: $('#feature-targets').value.trim() || defaultTargets(), xPositions: $('#x-positions').value.trim(), normalization: $('#normalize').checked, reference: $('#normalization-reference').value.trim(), allowAgentQuestions: $('#allow-agent-questions').checked, modelEffort: $('#model-effort').value};
+    return {channel, mode: state.mode, targets: $('#feature-targets').value.trim() || defaultTargets(), xPositions: $('#x-positions').value.trim(), normalization: $('#normalize').checked, reference: $('#normalization-reference').value.trim(), allowAgentQuestions: $('#allow-agent-questions').checked, modelEffort: $('#model-effort').value, scatterWorkflow: $('#scatter-workflow').value, scatterLabel: $('#scatter-workflow').selectedOptions[0].textContent};
   };
   $('#to-review').addEventListener('click', () => {
     showError(''); const info = summary();
@@ -229,7 +232,7 @@
     const positions = info.xPositions.split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean);
     if (positions.some(x=>!Number.isFinite(Number(x)))) return showError('Enter x positions as finite numbers separated by commas.');
     $('#review-summary').textContent = `${info.channel} · ${info.mode === 'complete' ? 'complete curves, experimental' : 'selected features'}${info.normalization ? ` · normalized to ${info.reference}` : ''}`;
-    $('#request-review').innerHTML = `<div class="review-line"><span>SOURCE</span><strong>${esc(state.upload.original_name)}${state.page ? ` · page ${state.page}` : ''}</strong></div><div class="review-line"><span>FIGURE</span><strong>${esc(state.upload.explanation || 'Uploaded image')}</strong></div><div class="review-line"><span>CHANNEL</span><strong>${esc(info.channel)}</strong></div><div class="review-line"><span>EXTRACTION</span><strong>${info.mode === 'complete' ? '<span class="mode-tag amber">EXPERIMENTAL</span> Complete curves' : 'Selected peaks or points'}</strong></div><div class="review-line"><span>MEASURE</span><strong>${esc(info.targets || 'Requested x positions')}${info.xPositions ? ` · x = ${esc(info.xPositions)}` : ''}</strong></div><div class="review-line"><span>REFERENCE</span><strong>${info.normalization ? esc(info.reference) : 'No normalization'}</strong></div><div class="review-line"><span>AGENT EFFORT</span><strong>${esc(info.modelEffort)}</strong></div><div class="review-line"><span>AGENT QUESTIONS</span><strong>${info.allowAgentQuestions ? 'Allowed during extraction' : 'Off · continue with review warnings'}</strong></div>`;
+    $('#request-review').innerHTML = `<div class="review-line"><span>SOURCE</span><strong>${esc(state.upload.original_name)}${state.page ? ` · page ${state.page}` : ''}</strong></div><div class="review-line"><span>FIGURE</span><strong>${esc(state.upload.explanation || 'Uploaded image')}</strong></div><div class="review-line"><span>CHANNEL</span><strong>${esc(info.channel)}</strong></div><div class="review-line"><span>EXTRACTION</span><strong>${info.mode === 'complete' ? '<span class="mode-tag amber">EXPERIMENTAL</span> Complete curves' : 'Selected peaks or points'}</strong></div><div class="review-line"><span>MEASURE</span><strong>${esc(info.targets || 'Requested x positions')}${info.xPositions ? ` · x = ${esc(info.xPositions)}` : ''}</strong></div><div class="review-line"><span>REFERENCE</span><strong>${info.normalization ? esc(info.reference) : 'No normalization'}</strong></div><div class="review-line"><span>AGENT EFFORT</span><strong>${esc(info.modelEffort)}</strong></div><div class="review-line"><span>SCATTER WORKFLOW</span><strong>${esc(info.scatterLabel)}</strong></div><div class="review-line"><span>AGENT QUESTIONS</span><strong>${info.allowAgentQuestions ? 'Allowed during extraction' : 'Off · continue with review warnings'}</strong></div>`;
     $('#launch-actions').classList.remove('hidden'); $('#result-view').classList.add('hidden'); $('#job-progress').classList.add('hidden'); $('#clarification').classList.add('hidden'); $('#begin-extraction').disabled = false; setStep(4);
   });
   $('#begin-extraction').addEventListener('click', async () => {
@@ -244,7 +247,7 @@
       $('#plot-kind').value = 'Scatter plot'; $('#spectrum-type').value = 'NMR';
       $('#nmr-nucleus').value = ''; $('#normalize').checked = false;
       $('#allow-agent-questions').checked = false; $('#agent-question-status').textContent = 'Off';
-      $('#model-effort').value = 'medium'; updateEffortDisplay();
+      $('#model-effort').value = 'high'; updateEffortDisplay(); $('#scatter-workflow').value = 'beta';
       $('#normalization-reference').value = '';
       $('input[name="mode"][value="selected"]').checked = true;
       $$('.mode-option').forEach(x => x.classList.toggle('selected', $('input', x).checked));
@@ -261,7 +264,7 @@
     const description = state.category === 'spectroscopy' ? `${$('#spectrum-type').value}${nucleus}` : state.category === 'plot' ? $('#plot-kind').value : $('#channel-description').value.trim();
     const body = {upload_id: state.upload.id, category: state.category, mode: state.mode,
       description, targets: info.targets, x_positions: info.xPositions, normalization: info.normalization,
-      normalization_reference: info.reference, allow_agent_questions: info.allowAgentQuestions, model_effort: info.modelEffort};
+      normalization_reference: info.reference, allow_agent_questions: info.allowAgentQuestions, model_effort: info.modelEffort, scatter_workflow: info.scatterWorkflow};
     try {
       const job = await apiPost('/api/jobs', body); state.jobId = job.id; $('#begin-extraction').disabled = true; $('#launch-actions').classList.add('hidden');
       $('#job-progress').classList.remove('hidden'); $('#progress-title').textContent = 'Preparing your extraction'; $('#progress-status').textContent = 'QUEUED'; $('#progress-bar').style.width = '12%';

@@ -462,7 +462,7 @@ def test_effort_is_validated_and_saved_in_request(question_job,monkeypatch,provi
         assert response.status_code==(202 if valid else 400),response.text
         if valid:
             saved=browser._read(browser._job_dir(response.json()['id'])/'request.json')
-            assert saved['model_effort']==(choice or 'medium')
+            assert saved['model_effort']==(choice or 'high')
 
 
 def test_chosen_effort_survives_clarification_and_all_subsequent_stages(question_job):
@@ -479,3 +479,77 @@ def test_chosen_effort_survives_clarification_and_all_subsequent_stages(question
     assert result['inference_profile']['effort']=='high'
     assert len(calls)>=3
     assert all(call['inference_profile']['effort_choice']=='high' for call in calls)
+
+
+@pytest.mark.parametrize('settings,valid',[
+    ({},True),({'scatter_workflow':'beta'},True),({'scatter_workflow':'legacy'},True),
+    ({'scatter_workflow':'beta','jev_mode':'assist'},False),
+    ({'scatter_workflow':'legacy','jev_mode':'assist'},False),
+    ({'scatter_workflow':[]},False),
+    ({'scatter_workflow':'beta','jev_mode':'assist','x_positions':'20'},False),
+    ({'scatter_workflow':'beta','jev_mode':'assist','targets':'peak A'},False),
+])
+def test_concurrent_default_classical_option_and_no_jev(question_job,monkeypatch,settings,valid):
+    app,job_id,folder,data,plan,calls=question_job
+    browser._json(folder/'job.json',{'status':'complete'})
+    monkeypatch.setattr(browser.app.state,'token','test-local-token')
+    async def skip_run(*args,**kwargs):pass
+    monkeypatch.setattr(browser,'_run_job',skip_run)
+    body={'upload_id':data['upload_id'],'category':'plot','mode':'selected',
+          'description':'Markers with fitted lines','targets':'All data points',**settings}
+    with TestClient(browser.app,base_url='http://127.0.0.1') as client:
+        response=client.post('/api/jobs',json=body,headers={'X-Plot-Reader-Token':'test-local-token'})
+        assert response.status_code==(202 if valid else 400),response.text
+        if valid:
+            saved=browser._read(browser._job_dir(response.json()['id'])/'request.json')
+            assert saved['scatter_workflow']==settings.get('scatter_workflow','beta')
+            assert 'jev_mode' not in saved
+            assert saved['model_effort']=='high'
+
+
+@pytest.mark.parametrize('provider',['codex','claude'])
+@pytest.mark.parametrize('workflow',['beta','legacy'])
+def test_saved_scatter_choice_routes_to_the_matching_workflow(question_job,monkeypatch,provider,workflow):
+    app,job_id,folder,data,plan,calls=question_job
+    monkeypatch.setenv('PLOT_READER_AGENT',provider)
+    data.update(category='plot',targets='All data points',scatter_workflow=workflow,model_effort='high')
+    browser._json(folder/'request.json',data)
+    plan['clarifications']=[]
+    stages=[]
+    async def compact(runner,*args):
+        stages.append(('compact',runner.profile.copy()))
+        return {**copy.deepcopy(plan),'selections':[],'scatter_beta':True,
+                'marker_series':[{'name':'Peaks','shape':'circle','guide':'round marker'}]}
+    async def grounded(runner,current,*args):
+        stages.append(('concurrent',runner.profile.copy()))
+        return {**current,'selections':copy.deepcopy(plan['selections']),'_beta_grounded':True,
+                'inventory_complete':False,'unresolved_inventory':['Coverage is uncertain.']}
+    async def classical(runner,current,*args):
+        stages.append(('classical',runner.profile.copy()))
+        return current
+    monkeypatch.setattr(browser,'plan_scatter',compact)
+    monkeypatch.setattr(browser,'ground_scatter_beta',grounded)
+    monkeypatch.setattr(browser,'ground_scatter',classical)
+    asyncio.run(browser._run_job(app,job_id))
+    job=browser._read(folder/'job.json')
+    assert job['status']=='complete',job.get('error')
+    assert [name for name,profile in stages]==(['compact','concurrent'] if workflow=='beta' else ['classical'])
+    assert all(profile['effort']=='high' and profile['provider']==provider for _,profile in stages)
+    saved=browser._read(folder/'result.json')
+    assert saved['request']['scatter_workflow']==workflow
+    assert saved['inference_profile']['effort']=='high'
+    assert 'auxiliary_inference' not in saved
+
+
+def test_restart_preserves_classical_and_explicit_medium(question_job,monkeypatch):
+    app,job_id,folder,data,plan,calls=question_job
+    data.update(scatter_workflow='legacy',model_effort='medium')
+    browser._json(folder/'request.json',data);browser._json(folder/'job.json',{'status':'complete'})
+    monkeypatch.setattr(browser.app.state,'token','test-local-token')
+    async def skip(*args,**kwargs):pass
+    monkeypatch.setattr(browser,'_run_job',skip)
+    with TestClient(browser.app,base_url='http://127.0.0.1') as client:
+        response=client.post(f'/api/jobs/{job_id}/restart',headers={'X-Plot-Reader-Token':'test-local-token'})
+        assert response.status_code==202,response.text
+        saved=browser._read(browser._job_dir(response.json()['id'])/'request.json')
+        assert saved['scatter_workflow']=='legacy' and saved['model_effort']=='medium'

@@ -24,8 +24,21 @@ def measure_selected(session_id: str, x_axis: dict[str, Any], selections: list[d
     # Check-tick policy and residual uncertainty belong to this browser adapter.
     engine_axes = {name: {k:v for k,v in value.items() if k in {'anchors','scale'}} if value else None
                    for name,value in (('x',x_axis),('y',y_axis))}
-    result = core.measure_plot(session_id, engine_axes['x'], selections,
-        engine_axes['y'], reference_label, baseline_pixel, use_label_proposals)
+    if len(selections) > 100 and not reference_label and not use_label_proposals:
+        # Keep the numerical engine's bounded-call contract. The browser owns
+        # the complete inventory and combines disjoint batches without truncation.
+        batches = [core.measure_plot(session_id, engine_axes['x'], selections[start:start+100],
+            engine_axes['y'], None, baseline_pixel, False) for start in range(0, len(selections), 100)]
+        result = batches[0]
+        result['points'] = [point for batch in batches for point in batch['points']]
+        result['browser_measurement_batches'] = len(batches)
+        # Engine files are overwritten per bounded call. Do not advertise a
+        # last-batch file as the combined result; the browser writes full outputs.
+        for key in ('json_path', 'csv_path', 'overlay_path'):
+            result.pop(key, None)
+    else:
+        result = core.measure_plot(session_id, engine_axes['x'], selections,
+            engine_axes['y'], reference_label, baseline_pixel, use_label_proposals)
     for name, axis in maps.items():
         result[f"{name}_axis"] = asdict(axis) if axis else None
         original = x_axis if name == 'x' else y_axis

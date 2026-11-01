@@ -7,10 +7,10 @@ plot-reading application with remote visual inference and local measurements.
 
 - Codex setup: run `python3 scripts/setup.py --agent codex --smoke-test`, then
   `uv run plot-reader web --agent codex`. Plot inference is exactly
-  `gpt-6-luna`, medium reasoning effort by default, priority/Fast service tier.
+  `gpt-6-luna`, high reasoning effort by default, priority/Fast service tier.
 - Claude setup: run `python3 scripts/setup.py --agent claude --smoke-test`, then
   `uv run plot-reader web --agent claude`. Plot inference is exactly
-  `claude-haiku-5-5`, medium effort by default.
+  `claude-haiku-5-5`, high effort by default.
 - Each analysis uses the user's selected effort for every model call, including
   repairs, tool decisions, reviews and clarification resumes. OpenAI options are
   light/medium/high/xhigh (light maps to low); Claude options are

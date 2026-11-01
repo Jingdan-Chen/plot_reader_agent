@@ -39,7 +39,7 @@ def fake_cli(monkeypatch,provider,result):
 @pytest.mark.parametrize('provider',['codex','claude'])
 def test_provider_receives_image_exact_profile_and_validates_output(tmp_path,monkeypatch,provider):
     calls=fake_cli(monkeypatch,provider,{'ready':True});events=[]
-    monkeypatch.setenv('OPENAI_API_KEY','not-forwarded');monkeypatch.setenv('CLAUDECODE','1')
+    monkeypatch.setenv('TYPESAFE_API_KEY','not-forwarded');monkeypatch.setenv('OPENAI_API_KEY','not-forwarded');monkeypatch.setenv('CLAUDECODE','1')
     image=tmp_path/'input.png';Image.new('RGB',(96,96),'white').save(image)
     async def emit(event):events.append(event)
     timing=AnalysisTiming(tmp_path/'timing')
@@ -56,14 +56,14 @@ def test_provider_receives_image_exact_profile_and_validates_output(tmp_path,mon
     if provider=='claude':assert len(report['local_python_calls'])==2
     assert result=={'ready':True}
     args=calls[0]['args'];environment=calls[0]['options']['env']
-    assert 'OPENAI_API_KEY' not in environment and 'CLAUDECODE' not in environment
+    assert 'OPENAI_API_KEY' not in environment and 'CLAUDECODE' not in environment and 'TYPESAFE_API_KEY' not in environment
     assert events[0]['message']=='Locating the requested peaks and points'
     if provider=='codex':
-        assert 'service_tier=priority' in args and 'model_reasoning_effort=medium' in args and 'gpt-6-luna' in args
+        assert 'service_tier=priority' in args and 'model_reasoning_effort=high' in args and 'gpt-6-luna' in args
         assert '--ignore-user-config' in args and str(image) in args
     else:
         assert args[args.index('--model')+1]=='claude-haiku-5-5'
-        assert args[args.index('--effort')+1]=='medium'
+        assert args[args.index('--effort')+1]=='high'
         assert args[args.index('--tools')+1]=='' and '--restricted' in args
         content=json.loads(calls[0]['input'])['message']['content']
         assert content[1]['source']['media_type']=='image/png' and content[1]['source']['data']
@@ -99,7 +99,7 @@ def test_run_effort_is_applied_to_every_cli_call_and_recorded(tmp_path,monkeypat
 
 
 @pytest.mark.parametrize('provider,expected',[('codex',['light','medium','high','xhigh']),('claude',['low','medium','high','extra'])])
-def test_portal_effort_options_match_provider_with_medium_selected(tmp_path,monkeypatch,provider,expected):
+def test_portal_effort_options_match_provider_with_high_selected(tmp_path,monkeypatch,provider,expected):
     monkeypatch.setenv('PLOT_READER_AGENT',provider)
     monkeypatch.setattr(browser,'DATA_ROOT',tmp_path)
     monkeypatch.setattr(browser.app.state,'token','test')
@@ -107,8 +107,11 @@ def test_portal_effort_options_match_provider_with_medium_selected(tmp_path,monk
         page=client.get('/?token=test').text
     select=re.search(r'<select id="model-effort"[^>]*>(.*?)</select>',page,re.S).group(1)
     assert re.findall(r'<option value="([^"]+)"',select)==expected
-    assert re.search(r'<option value="medium"[^>]* selected>',select)
+    assert re.search(r'<option value="high"[^>]* selected>',select)
     assert '__MODEL_EFFORT_OPTIONS__' not in page
+    scatter=re.search(r'<select id="scatter-workflow"[^>]*>(.*?)</select>',page,re.S).group(1)
+    assert re.search(r'<option value="beta"[^>]* selected>',scatter)
+    assert 'Classical (legacy)' in scatter and 'id="jev-mode"' not in page
 
 
 def test_saved_run_shows_its_original_inference_profile(tmp_path,monkeypatch):
@@ -116,7 +119,7 @@ def test_saved_run_shows_its_original_inference_profile(tmp_path,monkeypatch):
     monkeypatch.setattr(browser.app.state,'token','test')
     job_id='d'*32;folder=tmp_path/'jobs'/job_id
     browser._json(folder/'result.json',{'rows':[]})
-    profile={'provider':'codex','model':'gpt-6-luna','effort':'high','label':'LUNA 6 · high · Fast'}
+    profile={'provider':'codex','model':'gpt-6-luna','effort':'medium','label':'LUNA 6 · medium · Fast'}
     broken=folder/'worker'/'aaa'/'inference.json';broken.parent.mkdir(parents=True);broken.write_text('incomplete')
     browser._json(folder/'worker'/'selected-plan'/'inference.json',profile)
     with TestClient(browser.app,base_url='http://127.0.0.1') as client:
@@ -161,5 +164,5 @@ def test_claude_portal_displays_actual_provider(tmp_path,monkeypatch):
     monkeypatch.setattr(browser.app.state,'token','test')
     with TestClient(browser.app,base_url='http://127.0.0.1') as client:
         response=client.get('/?token=test')
-        assert 'Haiku 5.5 · medium' in response.text and 'Haiku · latest action' in response.text
+        assert 'Haiku 5.5 · high' in response.text and 'Haiku · latest action' in response.text
         assert '__ASSISTANT_' not in response.text

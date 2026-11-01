@@ -2,7 +2,7 @@
 
 A local browser application that turns scientific plot images and PDF figures into measured tables, annotated overlays, and a record of the evidence used for each measurement.
 
-The visual assistant interprets the figure and chooses bounded local tools. Python measures source pixels, calibrates axes, validates coordinates, and writes the results. You can run the same workflow with **Codex / LUNA 6 · medium · Fast** or **Claude Code / Haiku 5.5 · medium**.
+The visual assistant interprets the figure and chooses bounded local tools. Python measures source pixels, calibrates axes, validates coordinates, and writes the results. You can run the same workflow with **Codex / LUNA 6 · high · Fast** or **Claude Code / Haiku 5.5 · high**.
 
 ## Contents
 
@@ -59,23 +59,23 @@ codex
 
 Paste this instruction:
 
-> Read README.md and AGENTS.md. Install and run this application locally with the Codex inference backend. Use gpt-6-luna with medium effort by default and the priority/Fast service tier. Preserve the per-run effort selected in the application. Check Python, uv, Tesseract, Poppler, Codex CLI compatibility and sign-in. Run `python3 scripts/setup.py --agent codex --smoke-test`, fix installation problems, and run the release tests. The smoke test makes one real inference request with a generated image. Start `uv run plot-reader web --agent codex`, keep its process running, and give me the localhost URL printed by the server. For PDF input, explain how to provide PADDLEOCR_API_TOKEN through the local environment; never ask me to paste a token into a repository file or chat. Do not silently substitute another model. If account authentication requires my action, give me the exact sign-in step and resume after I complete it.
+> Read README.md and AGENTS.md. Install and run this application locally with the Codex inference backend. Use gpt-6-luna with high effort by default and the priority/Fast service tier. Preserve the per-run effort selected in the application. Check Python, uv, Tesseract, Poppler, Codex CLI compatibility and sign-in. Run `python3 scripts/setup.py --agent codex --smoke-test`, fix installation problems, and run the release tests. The smoke test makes one real inference request with a generated image. Start `uv run plot-reader web --agent codex`, keep its process running, and give me the localhost URL printed by the server. For PDF input, explain how to provide PADDLEOCR_API_TOKEN through the local environment; never ask me to paste a token into a repository file or chat. Do not silently substitute another model. If account authentication requires my action, give me the exact sign-in step and resume after I complete it.
 
-The installation agent may use its own chosen reasoning settings. Plot inference uses the selected per-run effort with the LUNA model and Fast service tier above; medium is the default.
+The installation agent may use its own chosen reasoning settings. Plot inference uses the selected per-run effort with the LUNA model and Fast service tier above; high is the default.
 
 ### With Claude Code
 
 Use a current Claude Code release. Start the installer agent with the requested model and effort:
 
 ```bash
-claude --model claude-haiku-5-5 --effort medium
+claude --model claude-haiku-5-5 --effort high
 ```
 
 Paste this instruction:
 
-> Read README.md and AGENTS.md. Install and run this application locally with the Claude inference backend. Use claude-haiku-5-5 with medium effort by default for plot inference, with no substitute model. Preserve the per-run effort selected in the application. Check Python, uv, Tesseract, Poppler, a current Claude Code CLI and sign-in. Run `python3 scripts/setup.py --agent claude --smoke-test`, fix installation problems, and run the release tests. The smoke test makes one real inference request with a generated image. Start `uv run plot-reader web --agent claude`, keep its process running, and give me the localhost URL printed by the server. For PDF input, explain how to provide PADDLEOCR_API_TOKEN through the local environment; never ask me to paste a token into a repository file or chat. If authentication requires my action, give me the exact sign-in step and resume after I complete it. Do not run the Codex backend for this setup.
+> Read README.md and AGENTS.md. Install and run this application locally with the Claude inference backend. Use claude-haiku-5-5 with high effort by default for plot inference, with no substitute model. Preserve the per-run effort selected in the application. Check Python, uv, Tesseract, Poppler, a current Claude Code CLI and sign-in. Run `python3 scripts/setup.py --agent claude --smoke-test`, fix installation problems, and run the release tests. The smoke test makes one real inference request with a generated image. Start `uv run plot-reader web --agent claude`, keep its process running, and give me the localhost URL printed by the server. For PDF input, explain how to provide PADDLEOCR_API_TOKEN through the local environment; never ask me to paste a token into a repository file or chat. If authentication requires my action, give me the exact sign-in step and resume after I complete it. Do not run the Codex backend for this setup.
 
-The application passes `--model claude-haiku-5-5` and the selected effort on each Claude call; medium is the default. A CLI without the required flags produces an actionable error before inference.
+The application passes `--model claude-haiku-5-5` and the selected effort on each Claude call; high is the default. A CLI without the required flags produces an actionable error before inference.
 
 ## Prerequisites
 
@@ -199,24 +199,24 @@ PDF outputs include `benchmark.txt`, `md/`, `pictures/`, and `bibtex/citation.bi
 
 1. **Source:** upload an image, or select an extracted picture from a PDF.
 2. **Channel:** choose Spectroscopy, Normal plot, or Others. NMR nucleus is optional and appears only for NMR.
-3. **Measure:** choose selected peaks/points or experimental complete curves. Describe a subset, enter x positions, or leave the description blank to use the displayed default. Under **Extraction settings**, choose agent effort (medium by default) and whether the agent may ask questions during extraction (off by default).
+3. **Measure:** choose selected peaks/points or experimental complete curves. Describe a subset, enter x positions, or leave the description blank to use the displayed default. Under **Extraction settings**, choose agent effort (high by default) and whether the agent may ask questions during extraction (off by default).
 4. **Review:** inspect the effective request and start extraction. The latest-action box reports short operations as they occur.
 5. **Results:** inspect the table, source overlay, uncertainties, warnings, and unresolved rows before exporting. If questions are enabled, respond to a focused clarification when the visible evidence is insufficient.
 
 ### Agent effort
 
-Before analysis, choose **Agent effort** under **Extraction settings**. The dropdown reflects the installed inference provider and starts at **Medium (default)** for each new extraction.
+Before analysis, choose **Agent effort** under **Extraction settings**. The dropdown reflects the installed inference provider and starts at **High (default)** for each new extraction.
 
 | Installation | Choices shown in the browser | Values sent to the inference CLI |
 | --- | --- | --- |
-| OpenAI / Codex | Light, Medium (default), High, Xhigh | `low`, `medium`, `high`, `xhigh` |
-| Anthropic / Claude | Low, Medium (default), High, Extra | `low`, `medium`, `high`, `xhigh` |
+| OpenAI / Codex | Light, Medium, High (default), Xhigh | `low`, `medium`, `high`, `xhigh` |
+| Anthropic / Claude | Low, Medium, High (default), Extra | `low`, `medium`, `high`, `xhigh` |
 
 Light and Extra are application labels: Light maps to OpenAI `low`, and Extra maps to Claude `xhigh`. The underlying values are described in the [official OpenAI configuration reference](https://learn.chatgpt.com/docs/config-file/config-reference) and [official Anthropic effort guide](https://platform.claude.com/docs/en/build-with-claude/effort). The models remain `gpt-6-luna` and `claude-haiku-5-5`; the Codex Fast service tier is independent of effort. Higher effort can take longer and consume more tokens.
 
 The review screen displays the selected effort. The request saves it as `model_effort`, using the browser choice (`light` or `extra` for those aliases). The host validates it against the active provider before queuing. Every call in the run uses that setting, including planning, repairs, scatter-tool decisions, coordinate reviews and final explanation. Clarification resumes and explicit restarts retain the saved choice. Each runner freezes its resolved profile, so changes to defaults cannot alter calls already in progress.
 
-`result.json` records the effective `inference_profile`. Each worker's `inference.json` records both the requested `effort_choice` and native `effort`, and timing hover details show them for model calls. Saved runs display their recorded profile when available, including older high-effort Codex runs. Existing requests without a saved effort use medium when explicitly rerun; their historical call records retain the effort originally used.
+`result.json` records the effective `inference_profile`. Each worker's `inference.json` records both the requested `effort_choice` and native `effort`, and timing hover details show them for model calls. Saved runs display their recorded profile when available, including older high-effort Codex runs. Existing requests without a saved effort use high when explicitly rerun; their historical call records retain the effort originally used.
 
 ### Questions during extraction
 
@@ -336,6 +336,27 @@ sequenceDiagram
     Host-->>UI: Final result and downloads
 ```
 
+## Scatter extraction workflows
+
+**Concurrent source review** is the default for all-points scatter requests. It
+uses compact axis/layout/series setup, local printed-tick checks, marker-plus-line
+fitting and plotted exemplars, candidate batching, and up to four independent
+source reviews at once. All calls use the selected model and effort; both LUNA
+and Haiku default to **high**. The complete-curve checkpoint is unchanged.
+
+Choose **Classical (legacy)** under Extraction settings to use the previous
+sequential workflow. The choice is saved with each run and retained on explicit
+restart. Existing requests without a workflow field retain the classical path.
+Point queries and normalization continue to use their existing measurement path.
+
+JEV image assistance is excluded from `main`; the experimental integration remains
+on the `beta` branch. Main does not submit scatter candidate images to TypeSafe.
+Imported requests that require JEV are rejected explicitly.
+
+See [workflow design and validation limits](docs/scatter-workflows.md). Inspect
+source overlays, coverage warnings and unresolved points: legend exclusion,
+duplicates and overlapping markers can still require correction.
+
 ## Scatter template tool calling
 
 Repeated marker shapes can provide a useful image-space prior when fitted lines, text, and marker strokes overlap. The assistant does not draw an arbitrary convolution kernel. It selects complete marker glyphs already visible in the source legend.
@@ -426,8 +447,8 @@ The ordinary inference worker has no general shell, file-editing, browser, or ex
 
 | Backend | Exact configured model | Effort | Speed setting |
 | --- | --- | --- | --- |
-| `codex` | `gpt-6-luna` | User-selected; `medium` default | `service_tier=priority` / Fast |
-| `claude` | `claude-haiku-5-5` | User-selected; `medium` default | Standard Claude CLI service behavior |
+| `codex` | `gpt-6-luna` | User-selected; `high` default | `service_tier=priority` / Fast |
+| `claude` | `claude-haiku-5-5` | User-selected; `high` default | Standard Claude CLI service behavior |
 
 These settings are explicit per call. The application does not silently choose another model if one is unavailable. The setup agent should report an access or CLI compatibility problem and help resolve it.
 
@@ -437,7 +458,7 @@ These settings are explicit per call. The application does not silently choose a
 - Calls are bounded by a timeout and canceled as a process group. No model credentials are placed in command arguments.
 - Plain CLI logs and model reasoning are not copied into the latest-action box.
 
-The Claude model ID and medium-effort support are described in the [official Haiku 5.5 model page](https://platform.claude.com/docs/en/models/haiku-5-5/overview) and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference). For Codex automation, see [official non-interactive mode documentation](https://developers.openai.com/codex/noninteractive).
+The Claude model ID and effort support are described in the [official Haiku 5.5 model page](https://platform.claude.com/docs/en/models/haiku-5-5/overview) and [Claude CLI reference](https://code.claude.com/docs/en/cli-reference). For Codex automation, see [official non-interactive mode documentation](https://developers.openai.com/codex/noninteractive).
 
 ### Local and remote processing
 
