@@ -33,6 +33,7 @@ The visual assistant interprets the figure and chooses bounded local tools. Pyth
 - Provides defaults when the feature description is blank, including “All data points” for scatter plots.
 - Shows the optional NMR nucleus control only for NMR.
 - Displays the latest assistant/workflow action in a compact box beside the source figure.
+- Offers an **Allow the agent to ask questions during extraction** switch before launch, off by default.
 - Ends each new analysis with interactive timing pie charts for total time, model response waits, workflow stages, and individual local Python calls, with floating details on hover.
 - Preserves uncertain or unresolved measurements, independent axis checks, numerical uncertainty, and the source-pixel locations used to calculate the table.
 - Supports explicit point corrections after a selected-measurement run and saves them as a separate result.
@@ -198,9 +199,17 @@ PDF outputs include `benchmark.txt`, `md/`, `pictures/`, and `bibtex/citation.bi
 
 1. **Source:** upload an image, or select an extracted picture from a PDF.
 2. **Channel:** choose Spectroscopy, Normal plot, or Others. NMR nucleus is optional and appears only for NMR.
-3. **Measure:** choose selected peaks/points or experimental complete curves. Describe a subset, enter x positions, or leave the description blank to use the displayed default.
+3. **Measure:** choose selected peaks/points or experimental complete curves. Describe a subset, enter x positions, or leave the description blank to use the displayed default. Under **Extraction settings**, choose whether the agent may ask questions during extraction; the switch starts off.
 4. **Review:** inspect the effective request and start extraction. The latest-action box reports short operations as they occur.
-5. **Results:** inspect the table, source overlay, uncertainties, warnings, and unresolved rows before exporting. Respond to a focused clarification when the visible evidence is insufficient.
+5. **Results:** inspect the table, source overlay, uncertainties, warnings, and unresolved rows before exporting. If questions are enabled, respond to a focused clarification when the visible evidence is insufficient.
+
+### Questions during extraction
+
+The **Allow the agent to ask questions during extraction** switch defaults to **off** for each new extraction. Its boolean value is saved as `allow_agent_questions` in the job request and is preserved on explicit restarts of that run. It applies to both Codex and Claude installations. Missing values default to false, and the API rejects non-boolean values.
+
+With the switch off, the selected-feature prompt and JSON schema require no clarification questions. The host also enforces the setting if a saved or model plan contains questions: it records the unanswered choices, continues with supported measurements, and marks affected results for review. If no selections can be supported, the request remains explicitly unresolved. An unsupported normalization reference or baseline yields original values and blank relative heights with a warning. No missing values, feature identities, anchors, references, or baselines are invented to keep the run moving.
+
+With the switch on, selected-feature extraction may pause for the existing focused clarification flow, including normalization confirmation. The experimental complete-curve path continues to express ambiguity through its unresolved inventory and warnings. This setting controls agent questions during measurement; PDF page-range and figure selection remain intake steps before extraction.
 
 ### Defaults for blank feature descriptions
 
@@ -260,7 +269,7 @@ flowchart TD
     B -->|Yes| T[Marker grounding and optional template tool]
     B -->|No| D[Validate individual feature centers]
     T --> D
-    D --> Q{Important ambiguity?}
+    D --> Q{Important ambiguity and questions enabled?}
     Q -->|Yes| H[Focused user clarification]
     H --> L
     Q -->|No| X[Local calibrated measurements]
@@ -299,7 +308,7 @@ sequenceDiagram
         Host->>Model: Enlarged source regions with candidate IDs
         Model-->>Host: Series assignments and bounded offsets
     end
-    opt User clarification needed
+    opt Questions enabled and user clarification needed
         Host-->>UI: Question with focused image choices
         UI->>Host: User response
         Host->>Model: Source evidence + clarification

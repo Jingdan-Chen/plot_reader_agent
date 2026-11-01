@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import csv
+import copy
 from contextlib import asynccontextmanager
 from functools import wraps
 import hashlib
@@ -516,11 +517,15 @@ async def create_job(request: Request) -> Response:
             raise ValueError("x positions must be finite numbers")
         description = str(body.get("description", "")).strip()
         targets = str(body.get("targets") or "").strip() or _default_targets(category, mode, description, positions)
+        allow_questions = body.get("allow_agent_questions", False)
+        if type(allow_questions) is not bool:
+            raise ValueError("Allow agent questions must be true or false")
         request_data = {"upload_id": upload_id, "source_sha256": source["sha256"],
                         "target": target, "category": category, "mode": mode,
                         "channel_description": description,
                         "targets": targets,
                         "x_positions": positions,
+                        "allow_agent_questions": allow_questions,
                         "normalization": bool(body.get("normalization", False)),
                         "normalization_reference": str(body.get("normalization_reference", "")).strip() or None,
                         "created_at": _now()}
@@ -581,15 +586,64 @@ def _page_manifest(request_data: dict[str, Any], output: Path) -> dict[str, Any]
     return _crop_source(source, request_data["target"], output)
 
 
+def _selected_schema(request_data: dict[str, Any]) -> dict[str, Any]:
+    schema = copy.deepcopy(SELECTED_SCHEMA)
+    if not request_data.get("allow_agent_questions", False):
+        schema["properties"]["clarifications"]["maxItems"] = 0
+    return schema
+
+
+def _question_policy_prompt(request_data: dict[str, Any]) -> str:
+    if request_data.get("allow_agent_questions", False):
+        return "Agent questions are enabled. If the image and request do not resolve an important choice, add one concise clarification with a small set of image-based choices."
+    return ("Agent questions are disabled. Do not ask the user questions or request confirmation. "
+            "Return clarifications as an empty array. Continue with source-supported measurements, "
+            "mark individually ambiguous features unresolved, and explain limitations in notes. "
+            "Do not invent missing values, axis anchors, feature identities, normalization references or baselines.")
+
+
+def _question_policy(plan: dict[str, Any], request_data: dict[str, Any]) -> dict[str, Any]:
+    """Keep a noninteractive run moving even if a saved/model plan contains questions."""
+    plan = copy.deepcopy(plan)
+    if not request_data.get("allow_agent_questions", False) and plan.get("clarifications"):
+        questions = plan.pop("clarifications")
+        plan["clarifications"] = []
+        plan.setdefault("unanswered_clarifications", []).extend(questions)
+        message = "Agent questions are disabled; interpretation needs review: " + "; ".join(q["question"] for q in questions)
+        plan.setdefault("question_policy_warnings", []).append(message)
+        plan.setdefault("notes", []).append(message)
+    if not request_data.get("allow_agent_questions", False) and not plan.get("selections"):
+        message = "Requested features could not be supported from the image; agent questions are disabled."
+        plan["selections"] = [{"label": "Unresolved requested features", "series": "Unresolved", "mode": "exact",
+            "candidate_id": None, "pixel": None, "x_value": None, "review_id": None,
+            "review_note": message, "status": "unresolved", "reason": message}]
+    if (not request_data.get("allow_agent_questions", False) and request_data.get("normalization")
+            and _normalization_needs_clarification(plan)):
+        plan["reference_label"] = None
+        plan["baseline_pixel"] = None
+        message = "Requested normalization is unsupported by the visible reference/baseline. Original values are reported; relative heights are unavailable."
+        for key in ("question_policy_warnings", "notes"):
+            if message not in plan.setdefault(key, []):
+                plan[key].append(message)
+    return plan
+
+
+def _normalization_needs_clarification(plan: dict[str, Any]) -> bool:
+    reference = next((item for item in plan.get("selections", []) if item.get("label") == plan.get("reference_label")), None)
+    return (not reference or reference.get("status") == "unresolved" or plan.get("baseline_pixel") is None
+            or (plan.get("y_axis") or {}).get("scale") == "log10")
+
+
 def _selected_prompt(request_data: dict[str, Any], inspection: dict[str, Any],
                      followup: str = "") -> str:
-    return f"""Measure the user's requested features from the attached plot image. Use only image evidence and the supplied local inspection record. Do not use tools. Do not invent tick values, feature assignments, units, or missing coordinates. Keep x_axis or y_axis null if that axis cannot be calibrated. Each calibrated axis needs exactly two anchors and at least one independent check. Reversed axes are valid. The source-coordinate grid labels ORIGINAL source pixels, x right and y down. Locate pixels against those labels; never infer a pixel from an expected data trend. Automatic plot_bounds and candidates are fallible heuristics: confirm against the unannotated source, especially when axes or scatter candidates are missing. Legend symbols and text are not data markers. For ambiguous printed labels, choose an inspected review region ID and explain the visible label-to-feature association in review_note. If the image and request do not resolve an important choice, add one concise clarification with a small set of image-based choices. Do not collapse a bulk request for all data points into one unresolved placeholder: make one selection per visible marker, with a stable series identity and point label. If the local inspector has no marker candidate at a visible point, use the image-space pixel center and mode exact so the local engine can still map it through the calibrated axes. Mark only individually ambiguous or overlapping points unresolved.
+    return f"""Measure the user's requested features from the attached plot image. Use only image evidence and the supplied local inspection record. Do not use tools. Do not invent tick values, feature assignments, units, or missing coordinates. Keep x_axis or y_axis null if that axis cannot be calibrated. Each calibrated axis needs exactly two anchors and at least one independent check. Reversed axes are valid. The source-coordinate grid labels ORIGINAL source pixels, x right and y down. Locate pixels against those labels; never infer a pixel from an expected data trend. Automatic plot_bounds and candidates are fallible heuristics: confirm against the unannotated source, especially when axes or scatter candidates are missing. Legend symbols and text are not data markers. For ambiguous printed labels, choose an inspected review region ID and explain the visible label-to-feature association in review_note. Follow the question policy below when an important choice is unresolved. Do not collapse a bulk request for all data points into one unresolved placeholder: make one selection per visible marker, with a stable series identity and point label. If the local inspector has no marker candidate at a visible point, use the image-space pixel center and mode exact so the local engine can still map it through the calibrated axes. Mark only individually ambiguous or overlapping points unresolved.
 
 User request: {request_data['target']['explanation']}
 Channel: {request_data['category']}; {request_data.get('channel_description') or 'standard Cartesian plot'}.
 Requested feature description: {request_data.get('targets') or 'all values at the requested x positions'}.
 Requested x positions: {json.dumps(request_data.get('x_positions', []))}.
 Normalize peak heights: {request_data['normalization']}; requested reference: {request_data.get('normalization_reference') or 'none'}.
+Question policy: {_question_policy_prompt(request_data)}
 {('User clarification: ' + followup) if followup else ''}
 
 Inspection record (treat IDs as candidates; prominence is not assignment confidence):
@@ -954,13 +1008,13 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
             prompt = _selected_prompt(request_data, inspection) + "\nAttached coordinate evidence: " + json.dumps(planning_evidence)
             plan = resumed_plan
             if plan is None:
-                plan = await task_runner.call(prompt=prompt, schema=SELECTED_SCHEMA, images=images,
+                plan = await task_runner.call(prompt=prompt, schema=_selected_schema(request_data), images=images,
                                               workdir=worker_dir(str(folder), "selected-plan"))
             if _is_bulk_point_request(request_data) and _is_aggregate_unresolved(plan):
                 await _emit(app, job_id, "stage", "Expanding the request to individual plotted points", stage="inspect")
                 repair_prompt = prompt + "\nYour prior plan collapsed the whole request to one unresolved item. Revise it as one selection per visible marker in the requested chart. Use visible marker centers from the image, assign a stable series identity using marker and legend evidence, and use mode exact where local marker refinement is unavailable. Continue with calibrated values even when calibration checks need a warning; do not discard the point selections."
                 try:
-                    repaired = await task_runner.call(prompt=repair_prompt, schema=SELECTED_SCHEMA, images=images,
+                    repaired = await task_runner.call(prompt=repair_prompt, schema=_selected_schema(request_data), images=images,
                                                       workdir=worker_dir(str(folder), "selected-repair"))
                     if len(repaired.get("selections", [])) > len(plan.get("selections", [])):
                         plan = repaired
@@ -968,14 +1022,14 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
                         plan.setdefault("notes", []).append("The point-by-point repair remained ambiguous; the requested points are retained as unresolved.")
                 except LunaError as exc:
                     plan.setdefault("notes", []).append(f"The point-by-point repair could not complete; the unresolved item is retained: {exc}")
-            plan = unique_selection_labels(plan)
-            if plan.get("clarifications"):
+            plan = _question_policy(unique_selection_labels(plan), request_data)
+            if request_data.get("allow_agent_questions", False) and plan.get("clarifications"):
                 _json(folder / "plan.json", plan)
                 await _job_update(app, job_id, status="needs_input", stage="clarification", plan=plan)
-                await _emit(app, job_id, "clarification", "LUNA needs your help to confirm the figure interpretation", questions=plan["clarifications"])
+                await _emit(app, job_id, "clarification", "The agent needs your help to confirm the figure interpretation", questions=plan["clarifications"])
                 return
-            if request_data.get("normalization") and (not plan.get("reference_label") or plan.get("baseline_pixel") is None
-                    or (plan.get("y_axis") or {}).get("scale") == "log10"):
+            if (request_data.get("allow_agent_questions", False) and request_data.get("normalization")
+                    and _normalization_needs_clarification(plan)):
                 plan["clarifications"] = [{"id": "normalization-reference",
                     "question": "The image did not clearly establish both a normalization reference and a baseline. Should I measure the original values without normalization, or can you identify the reference and visible baseline?",
                     "choices": ["Keep original values; skip normalization", "I will clarify the reference and baseline"], "region": None}]
@@ -1060,6 +1114,9 @@ Purple C IDs in the crop images mark source-measured contour centers. For hollow
                 if selection.get("coordinate_review") == "uncertain" and point.get("status") == "resolved":
                     point.update(status="needs_review", reason=selection.get("coordinate_review_note"))
                 point["review_note"] = selection.get("coordinate_review_note") or point.get("review_note")
+                if plan.get("unanswered_clarifications") and point.get("status") == "resolved":
+                    point.update(status="needs_review", reason="Interpretation needs review because extraction continued without clarification.")
+            measured["question_policy_warnings"] = plan.get("question_policy_warnings", [])
             _json(folder / "plan.json", plan)
             await _job_update(app, job_id, plan=plan)
             calibration_warnings = measured.get("calibration_warnings", [])
@@ -1091,6 +1148,8 @@ Request: {request_data['target']['explanation']}
 Channel: {request_data['category']}.
 Mode: {request_data['mode']}.
 Normalization requested: {request_data['normalization']}.
+User questions allowed: {request_data.get('allow_agent_questions', False)}. Write an explanation, not follow-up questions.
+Question policy warnings: {json.dumps(measured.get('question_policy_warnings', []), ensure_ascii=False)}
 Calibration warnings: {json.dumps(measured.get('calibration_warnings', []), ensure_ascii=False)}
 Pixel assignment warnings: {json.dumps(measured.get('coordinate_review_warnings', []), ensure_ascii=False)}
 Rows/status: {json.dumps(rows[:120], ensure_ascii=False)}
@@ -1110,8 +1169,8 @@ Engine summary: {json.dumps({k: measured.get(k) for k in ('x_axis','y_axis','bas
                   "request": request_data, "source": {"name": upload_record["original_name"],
                       "sha256": upload_record["sha256"], **target_meta},
                   "engine": job.get("engine"), "comment": comment,
-                  "review_issues": list(dict.fromkeys([*calibration_warnings, *measured.get("coordinate_review_warnings", []), *narrative_issues])),
-                  "measurement": {k: measured.get(k) for k in ("implementation_id", "x_axis", "y_axis", "baseline_pixel", "reference_label", "calibration_residual_transformed", "calibration_warnings", "coordinate_review_warnings", "inventory_complete", "unresolved_inventory") if k in measured},
+                  "review_issues": list(dict.fromkeys([*calibration_warnings, *measured.get("coordinate_review_warnings", []), *measured.get("question_policy_warnings", []), *narrative_issues])),
+                  "measurement": {k: measured.get(k) for k in ("implementation_id", "x_axis", "y_axis", "baseline_pixel", "reference_label", "calibration_residual_transformed", "calibration_warnings", "coordinate_review_warnings", "question_policy_warnings", "inventory_complete", "unresolved_inventory") if k in measured},
                   "overlay_path": str(overlay.relative_to(folder)), "completed_at": _now()}
         _write_outputs(folder, rows, result)
         await _job_update(app, job_id, status="complete", stage="complete", result_ready=True)
@@ -1197,10 +1256,10 @@ async def _resume_selected(app: Starlette, job_id: str, question: dict[str, Any]
         if not skip:
             text = f"Question {question['id']}: {question['question']}\nUser answer: {answer}"
             evidence = await run_local(coordinate_evidence, image_path, folder / "evidence")
-            plan = await runner.call(prompt=_selected_prompt(data, inspection, text) + "\nCoordinate evidence: " + json.dumps(evidence), schema=SELECTED_SCHEMA,
+            plan = await runner.call(prompt=_selected_prompt(data, inspection, text) + "\nCoordinate evidence: " + json.dumps(evidence), schema=_selected_schema(data),
                                      images=[str(image_path)] + [item["path"] for item in evidence],
                                      workdir=worker_dir(str(folder), f"clarification-{job.get('clarification_count', 1)}"))
-            if plan.get("clarifications"):
+            if data.get("allow_agent_questions", False) and plan.get("clarifications"):
                 await _job_update(app, job_id, status="needs_input", stage="clarification", plan=plan)
                 await _emit(app, job_id, "clarification", "One more image choice needs your confirmation", questions=plan["clarifications"])
                 return

@@ -3,6 +3,10 @@ from __future__ import annotations
 import io
 import csv
 import json
+import copy
+import asyncio
+
+import pytest
 
 from PIL import Image, ImageDraw
 from starlette.testclient import TestClient
@@ -305,3 +309,134 @@ def test_saved_run_csv_download_uses_current_report_columns(tmp_path, monkeypatc
         evidence = client.get(f"/api/jobs/{job_id}/artifact/result.json", headers={"X-Plot-Reader-Token":"test-local-token"}).json()
         assert evidence["rows"] == [row]
     assert (folder / "table.csv").read_text() == old_csv
+
+
+@pytest.fixture
+def question_job(tmp_path, monkeypatch):
+    from starlette.applications import Starlette
+    from plot_reader import core
+
+    monkeypatch.setattr(browser, "DATA_ROOT", tmp_path / "browser")
+    monkeypatch.setattr(core, "SESSION_ROOT", tmp_path / "sessions")
+    job_id, upload_id = "e" * 32, "f" * 32
+    folder = browser._job_dir(job_id)
+    source = Image.new("RGB", (600, 400), "white")
+    ImageDraw.Draw(source).ellipse((295, 115, 305, 125), fill="black")
+    def prepare(data, destination):
+        source.save(destination)
+        return {"crop": [0, 0, 600, 400]}
+    monkeypatch.setattr(browser, "_page_manifest", prepare)
+    target = {"upload_id": upload_id, "explanation": "Peak A", "crop": [0, 0, 600, 400]}
+    browser._json(browser._upload_dir(upload_id) / "source.json", {"original_name": "plot.png", "sha256": "example"})
+    browser._json(browser._upload_dir(upload_id) / "target.json", target)
+    data = {"upload_id": upload_id, "source_sha256": "example", "target": target,
+        "category": "spectroscopy", "mode": "selected", "targets": "Peak A", "normalization": False}
+    browser._json(folder / "request.json", data)
+    browser._json(folder / "job.json", {"id": job_id, "status": "queued", "engine": "frozen-full"})
+    plan = {"x_axis": {"anchors": [{"pixel": 50, "value": 0}, {"pixel": 550, "value": 10}],
+            "checks": [{"pixel": 300, "value": 5}], "scale": "linear", "unit": "ppm"},
+        "y_axis": None, "selections": [{"label": "Peak A", "series": "Peaks", "mode": "exact",
+            "pixel": [300, 120], "candidate_id": None, "x_value": None, "review_id": None,
+            "review_note": None, "status": "selected", "reason": None}],
+        "reference_label": None, "baseline_pixel": None, "notes": [],
+        "clarifications": [{"id": "assignment", "question": "Which signal is Peak A?", "choices": ["Left", "Right"], "region": None}]}
+    calls = []
+    class Runner:
+        def __init__(self, emit):
+            self.emit = emit
+        async def call(self, **kwargs):
+            calls.append(kwargs)
+            if "selections" in kwargs["schema"]["properties"]:
+                # Deliberately ignore the schema to exercise host enforcement.
+                return copy.deepcopy(plan)
+            if "items" in kwargs["schema"]["properties"]:
+                return {"items": [{"selection_id": "1", "pixel": [300, 120], "candidate_id": None,
+                    "verdict": "confirmed", "reason": "Visible source peak"}]}
+            return {"comment": "Measured source pixels; review the recorded limitations.", "review_issues": []}
+        async def cancel(self):
+            pass
+    monkeypatch.setattr(browser, "LunaRunner", Runner)
+    app = Starlette()
+    app.state.runners, app.state.tasks, app.state.subscribers = {}, {}, {}
+    return app, job_id, folder, data, plan, calls
+
+
+@pytest.mark.parametrize("allow", [None, False, True])
+def test_question_setting_controls_whether_extraction_pauses(question_job, allow):
+    app, job_id, folder, data, plan, calls = question_job
+    if allow is not None:
+        data["allow_agent_questions"] = allow
+    browser._json(folder / "request.json", data)
+    asyncio.run(browser._run_job(app, job_id))
+    job = browser._read(folder / "job.json")
+    events = [json.loads(line) for line in (folder / "events.jsonl").read_text().splitlines()]
+    if allow:
+        assert job["status"] == "needs_input"
+        assert any(event["type"] == "clarification" for event in events)
+        assert not (folder / "result.json").exists()
+        assert "maxItems" not in calls[0]["schema"]["properties"]["clarifications"]
+    else:
+        assert job["status"] == "complete", job.get("error")
+        assert not any(event["type"] == "clarification" for event in events)
+        assert calls[0]["schema"]["properties"]["clarifications"]["maxItems"] == 0
+        assert "Do not ask the user questions" in calls[0]["prompt"]
+        result = browser._read(folder / "result.json")
+        assert result["rows"][0]["x"] == pytest.approx(5)
+        assert result["rows"][0]["status"] == "needs_review"
+        assert any("Which signal is Peak A?" in warning for warning in result["review_issues"])
+        saved_plan = browser._read(folder / "plan.json")
+        assert not saved_plan["clarifications"]
+        assert saved_plan["unanswered_clarifications"] == plan["clarifications"]
+
+
+@pytest.mark.parametrize("allow", [False, True])
+def test_unsupported_normalization_continues_or_asks_according_to_setting(question_job, allow):
+    app, job_id, folder, data, plan, calls = question_job
+    data.update(allow_agent_questions=allow, normalization=True, normalization_reference="Peak A")
+    plan["clarifications"] = []
+    browser._json(folder / "request.json", data)
+    asyncio.run(browser._run_job(app, job_id))
+    job = browser._read(folder / "job.json")
+    if allow:
+        assert job["status"] == "needs_input"
+        assert job["plan"]["clarifications"][0]["id"] == "normalization-reference"
+    else:
+        assert job["status"] == "complete", job.get("error")
+        result = browser._read(folder / "result.json")
+        assert result["rows"][0]["x"] == pytest.approx(5)
+        assert result["rows"][0]["height_relative"] is None
+        assert result["request"]["normalization"] is True
+        assert any("Original values are reported" in warning for warning in result["review_issues"])
+
+
+def test_question_policy_keeps_empty_plans_unresolved_and_schema_independent():
+    plan = {"selections": [], "clarifications": [], "reference_label": None, "baseline_pixel": None}
+    continued = browser._question_policy(plan, {})
+    assert continued["selections"][0]["status"] == "unresolved"
+    assert continued["selections"][0]["pixel"] is None
+    assert plan["selections"] == []
+    assert browser._selected_schema({})["properties"]["clarifications"]["maxItems"] == 0
+    assert "maxItems" not in browser._selected_schema({"allow_agent_questions": True})["properties"]["clarifications"]
+    assert "maxItems" not in browser.SELECTED_SCHEMA["properties"]["clarifications"]
+
+
+@pytest.mark.parametrize("setting,expected", [(None, False), (False, False), (True, True), ("false", "invalid"), (0, "invalid")])
+def test_question_setting_api_defaults_and_validates_boolean(question_job, monkeypatch, setting, expected):
+    app, job_id, folder, data, plan, calls = question_job
+    browser._json(folder / "job.json", {"status": "complete"})
+    monkeypatch.setattr(browser.app.state, "token", "test-local-token")
+    async def skip_run(*args, **kwargs):
+        pass
+    monkeypatch.setattr(browser, "_run_job", skip_run)
+    body = {"upload_id": data["upload_id"], "category": "spectroscopy", "mode": "selected"}
+    if setting is not None:
+        body["allow_agent_questions"] = setting
+    with TestClient(browser.app, base_url="http://127.0.0.1") as client:
+        response = client.post("/api/jobs", json=body, headers={"X-Plot-Reader-Token": "test-local-token"})
+        if expected == "invalid":
+            assert response.status_code == 400
+            assert "true or false" in response.json()["error"]
+        else:
+            assert response.status_code == 202, response.text
+            saved = browser._read(browser._job_dir(response.json()["id"]) / "request.json")
+            assert saved["allow_agent_questions"] is expected
