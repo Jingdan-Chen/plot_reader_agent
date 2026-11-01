@@ -5,7 +5,7 @@
   const measurementDefaults = JSON.parse($('#measurement-defaults').textContent);
   const state = {step: 1, upload: null, page: null, crop: null, cropBox: null, imageDims: null,
     targetConfirmed: false, category: 'spectroscopy', mode: 'selected', jobId: null, eventSource: null,
-    drawing: false, result: null};
+    drawing: false, result: null, timingCleanup: null};
   const api = async (path, options = {}) => {
     const headers = new Headers(options.headers || {});
     headers.set('X-Plot-Reader-Token', token);
@@ -328,6 +328,8 @@
     const imageUrl = authed(`/api/jobs/${job.id}/artifact/overlay.png`);
     const issues = (result.review_issues||[]).length ? `<div class="result-issues">Review notes: ${result.review_issues.map(esc).join(' · ')}</div>` : '';
     $('#result-view').innerHTML = `${exp}<div id="point-review"></div><div class="eyebrow result-eyebrow">MEASUREMENTS · ${rows.length} ROWS</div>${table}<button id="copy-table" class="copy-button" type="button">▣ Copy table</button><div class="result-comment">${esc(result.comment)}</div>${issues}<div class="result-image"><img src="${imageUrl}" alt="Annotated plot measurement overlay"></div><div class="download-row"><a href="${authed(`/api/jobs/${job.id}/artifact/table.csv`)}">↓ CSV</a><a href="${authed(`/api/jobs/${job.id}/artifact/result.json`)}">↓ JSON</a><a href="${imageUrl}" download="plot-reader-overlay.png">↓ Overlay</a></div><details class="provenance"><summary>Measurement details and source pixels</summary><pre>${esc(JSON.stringify(result.measurement,null,2))}</pre></details>${PlotReaderTiming.render(result.timing, authed(`/api/jobs/${job.id}/artifact/timing.json`))}`;
+    state.timingCleanup?.();
+    state.timingCleanup = PlotReaderTiming.mount($('#result-view .timing-report'), result.timing);
     if (!result.experimental) renderPointReview(job, result);
     $('#copy-table').addEventListener('click', async () => {
       const tsv = [cols.join('\t'), ...rows.map(row => cols.map(k => row[k] == null ? '' : String(k==='pixel'&&Array.isArray(row[k])?JSON.stringify(row[k]):row[k]).replace(/[\t\n]/g,' ')).join('\t'))].join('\n');

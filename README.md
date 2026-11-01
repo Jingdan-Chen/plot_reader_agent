@@ -33,7 +33,7 @@ The visual assistant interprets the figure and chooses bounded local tools. Pyth
 - Provides defaults when the feature description is blank, including “All data points” for scatter plots.
 - Shows the optional NMR nucleus control only for NMR.
 - Displays the latest assistant/workflow action in a compact box beside the source figure.
-- Ends each new analysis with measured total time, model response waits, workflow stage times, and the wall time of each local Python tool call.
+- Ends each new analysis with interactive timing pie charts for total time, model response waits, workflow stages, and individual local Python calls, with floating details on hover.
 - Preserves uncertain or unresolved measurements, independent axis checks, numerical uncertainty, and the source-pixel locations used to calculate the table.
 - Supports explicit point corrections after a selected-measurement run and saves them as a separate result.
 
@@ -459,7 +459,9 @@ The browser offers CSV, JSON, and overlay downloads. Intermediate filenames vary
 
 ## Time cost analysis
 
-Every new browser analysis ends with a **Time cost analysis** section. It uses the Python host's monotonic `perf_counter` clock for both inference backends. The assistant does not estimate these numbers. Values are wall times in seconds, displayed to three decimal places.
+Every new browser analysis ends with a **Time cost analysis** section. Its interactive donut chart has four views: **Overall time**, **Workflow stages**, **Model calls**, and **Python calls**. Hover a slice or its matching legend entry to see a floating detail box with duration, share of the current chart, and available stage, call count, status, provider/model, and start/end offsets. Keyboard focus shows the same details; tap/click pins a detail box, and Escape dismisses it. Arrow keys switch between view tabs. A scrollable legend keeps tiny slices and long call lists accessible. **Exact timing values** expands the original numerical tables, and **Timing JSON** downloads the full report. The chart uses local SVG and needs no external chart service.
+
+Timings use the Python host's monotonic `perf_counter` clock for both inference backends. The assistant does not estimate these numbers. Values are wall times in seconds, displayed to three decimal places.
 
 | Summary row | What it measures |
 | --- | --- |
@@ -469,9 +471,9 @@ Every new browser analysis ends with a **Time cost analysis** section. It uses t
 | Waiting for your clarification | Time paused for a requested user answer, including the interval before the resume task starts |
 | Other host work and scheduling | Remaining time, including thread scheduling, small host operations, event handling and saving intermediate artifacts |
 
-The four categories below total partition the elapsed time. The workflow-stage table gives inclusive wall times and their model-wait and Python portions: preparation, inspection/planning, selected measurements, source-coordinate review, complete-curve planning/validation/extraction, clarification handling, and final review. Repeated visits to the same stage are combined. The expandable model-response table lists every actual call by its worker-stage name and status. The local Python table lists each call separately, including repeated measurements, source crops/overlays, marker detection, template preparation/scans, and curve-engine validation/extraction.
+The overall chart's four categories partition elapsed time; its center shows total elapsed time. The workflow-stage view gives inclusive wall times and, in each floating detail box, the model-wait and Python portions: preparation, inspection/planning, selected measurements, source-coordinate review, complete-curve planning/validation/extraction, clarification handling, and final review. Repeated visits to the same stage are combined. The model-response view has one slice per actual call by its worker-stage name. The Python-call view has one slice per local call, including repeated measurements, source crops/overlays, marker detection, template preparation/scans, and curve-engine validation/extraction. Zero-duration entries remain in the legend without a visible slice; an empty view states that no calls were recorded.
 
-**Do not add stage or individual-call rows to the summary:** they describe the same elapsed work. Nested or concurrent local calls may overlap, so their individual durations can sum to more than the local-work summary. The summary removes overlaps; model-wait intervals take precedence if categories overlap.
+**Do not add the different chart views together:** they describe the same elapsed work. Each call view uses the sum of its call wall times as the pie denominator and labels its center **SUM OF CALLS**. Nested or concurrent calls may overlap, so that sum can exceed the elapsed time or the overall chart's corresponding portion. The overall summary removes overlaps; model-wait intervals take precedence if categories overlap. Slice angles use the recorded durations without enlarging tiny slices. Percentages and displayed seconds are rounded only for presentation.
 
 Model wait includes CLI startup, image transfer, provider queueing, inference, and response validation. The host cannot split those into server-only inference and network time. A local tool's time starts inside its Python worker, so thread queueing belongs to host overhead. Complete-engine subprocess timing includes process startup and child work; local OCR timing includes Tesseract where called. These are elapsed wall times, not CPU time or model billing metrics.
 
