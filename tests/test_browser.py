@@ -66,8 +66,9 @@ def test_reviewed_source_pixel_is_remeasured_and_exported(tmp_path, monkeypatch)
     exported = list(csv.DictReader((tmp_path / "table.csv").open(encoding="utf-8-sig")))[0]
     assert float(exported["x"]) == pytest.approx(5)
     assert float(exported["y"]) == pytest.approx(230/300)
-    assert json.loads(exported["pixel"]) == [300, 120]
-    assert exported["x_unit"] == "min"
+    saved = json.loads((tmp_path / "result.json").read_text())["rows"][0]
+    assert saved["pixel"] == [300, 120]
+    assert saved["x_unit"] == "min"
     assert not warnings
     overlay = tmp_path / "overlay.png"
     selection_overlay(source, measured["points"], overlay)
@@ -268,15 +269,39 @@ def test_complete_rows_use_calibrated_uncertainty_not_pixels(tmp_path):
     assert row["height_relative"] is None
 
 
-def test_csv_export_uses_copy_table_columns_and_pixel_format(tmp_path):
+def test_csv_export_uses_simplified_report_columns_and_retains_json_evidence(tmp_path):
     fields = ["panel", "series", "feature", "status", "x", "y", "height_relative",
-              "x_uncertainty", "y_uncertainty", "x_unit", "y_unit", "reason",
-              "pixel", "method", "review_id", "review_note"]
+              "reason", "method", "review_note"]
     rows = [{key: None for key in fields}]
-    rows[0].update(panel="P1", feature="A", status="resolved", x=2.5, pixel=[20, 30])
+    rows[0].update(panel="P1", feature="A", status="resolved", x=2.5, pixel=[20, 30],
+                   x_uncertainty=.1, x_unit="min", review_id="R1", reason="Overlap,\nneeds review")
     browser._write_outputs(tmp_path, rows, {})
     with (tmp_path / "table.csv").open(encoding="utf-8-sig", newline="") as stream:
         exported = list(csv.reader(stream))
     assert exported[0] == fields
-    assert exported[1][fields.index("pixel")] == "[20,30]"
     assert exported[1][fields.index("x")] == "2.5"
+    assert exported[1][fields.index("reason")] == "Overlap,\nneeds review"
+    assert json.loads((tmp_path / "result.json").read_text())["rows"] == rows
+
+
+def test_saved_run_csv_download_uses_current_report_columns(tmp_path, monkeypatch):
+    monkeypatch.setattr(browser, "DATA_ROOT", tmp_path)
+    monkeypatch.setattr(browser.app.state, "token", "test-local-token")
+    job_id = "c" * 32
+    folder = browser._job_dir(job_id)
+    row = {"panel":"P1", "feature":"A", "x":2.5, "pixel":[20,30], "x_uncertainty":.1,
+           "x_unit":"min", "review_id":"R1", "reason":"Note", "method":"exact", "review_note":"Reviewed"}
+    browser._json(folder / "result.json", {"rows":[row]})
+    old_csv = "x,pixel,x_uncertainty,x_unit,review_id\n2.5,old,.1,min,R1\n"
+    (folder / "table.csv").write_text(old_csv)
+    with TestClient(browser.app, base_url="http://127.0.0.1") as client:
+        url = f"/api/jobs/{job_id}/artifact/table.csv"
+        assert client.get(url).status_code == 403
+        response = client.get(url, headers={"X-Plot-Reader-Token":"test-local-token"})
+        assert response.status_code == 200
+        reader = csv.DictReader(io.StringIO(response.content.decode("utf-8-sig")))
+        assert reader.fieldnames == ["panel","series","feature","status","x","y","height_relative","reason","method","review_note"]
+        assert next(reader)["review_note"] == "Reviewed"
+        evidence = client.get(f"/api/jobs/{job_id}/artifact/result.json", headers={"X-Plot-Reader-Token":"test-local-token"}).json()
+        assert evidence["rows"] == [row]
+    assert (folder / "table.csv").read_text() == old_csv

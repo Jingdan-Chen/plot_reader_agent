@@ -722,15 +722,19 @@ def _complete_schema() -> dict[str, Any]:
         "required": ["inventory_complete", "unresolved_inventory", "panels"], "additionalProperties": False}
 
 
-def _write_outputs(folder: Path, rows: list[dict[str, Any]], result: dict[str, Any]) -> None:
+def _report_csv(rows: list[dict[str, Any]]) -> str:
     fields = ["panel", "series", "feature", "status", "x", "y", "height_relative",
-              "x_uncertainty", "y_uncertainty", "x_unit", "y_unit", "reason",
-              "pixel", "method", "review_id", "review_note"]
+              "reason", "method", "review_note"]
+    stream = io.StringIO(newline="")
+    writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    return stream.getvalue()
+
+
+def _write_outputs(folder: Path, rows: list[dict[str, Any]], result: dict[str, Any]) -> None:
     with (folder / "table.csv").open("w", newline="", encoding="utf-8-sig") as stream:
-        writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
-        writer.writeheader()
-        for row in rows:
-            writer.writerow({**row, "pixel": json.dumps(row["pixel"], separators=(",", ":")) if row["pixel"] is not None else ""})
+        stream.write(_report_csv(rows))
     result["rows"] = rows
     result["csv_path"] = "table.csv"
     recorder = current_timing.get()
@@ -1427,6 +1431,11 @@ async def artifact(request: Request) -> Response:
                    "overlay.png": "image/png", "source-image.png": "image/png"}
         if name not in allowed:
             raise ValueError("Artifact is not available")
+        if name == "table.csv":
+            rows = _read(folder / "result.json")["rows"]
+            return Response("\ufeff" + _report_csv(rows), media_type="text/csv",
+                            headers={"Content-Disposition": 'attachment; filename="table.csv"',
+                                     "Cache-Control": "no-store"})
         path = folder / name
         if name == "overlay.png":
             path = folder / _read(folder / "result.json")["overlay_path"]

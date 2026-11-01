@@ -455,6 +455,8 @@ artifacts/browser/
     ...                         # inspections, plans, review evidence, overlays
 ```
 
+The displayed measurement table, **Copy table**, and **CSV** download use these columns in order: **Panel, Series, Feature, Status, x, y, Relative height, Note, Method, Review note**. CSV downloads use the same simplified layout for saved runs as well. The complete row metadata, including uncertainties, units, source pixels, and review IDs, is available in the **JSON** download for audit and further analysis.
+
 The browser offers CSV, JSON, and overlay downloads. Intermediate filenames vary by the selected path; scatter runs can include marker layouts, candidate inventories, glyph atlases, response maps and `tool-trace.json`. Complete extraction retains the plan and local validation/extraction outputs.
 
 ## Time cost analysis
