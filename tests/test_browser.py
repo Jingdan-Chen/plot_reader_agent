@@ -342,9 +342,11 @@ def question_job(tmp_path, monkeypatch):
         "clarifications": [{"id": "assignment", "question": "Which signal is Peak A?", "choices": ["Left", "Right"], "region": None}]}
     calls = []
     class Runner:
-        def __init__(self, emit):
+        def __init__(self, emit, *, effort=None):
             self.emit = emit
+            self.profile = browser.assistant_profile(effort)
         async def call(self, **kwargs):
+            kwargs['inference_profile'] = self.profile
             calls.append(kwargs)
             if "selections" in kwargs["schema"]["properties"]:
                 # Deliberately ignore the schema to exercise host enforcement.
@@ -440,3 +442,40 @@ def test_question_setting_api_defaults_and_validates_boolean(question_job, monke
             assert response.status_code == 202, response.text
             saved = browser._read(browser._job_dir(response.json()["id"]) / "request.json")
             assert saved["allow_agent_questions"] is expected
+
+
+@pytest.mark.parametrize('provider,choice,valid',[
+    ('codex',None,True),('codex','light',True),('codex','medium',True),('codex','high',True),('codex','xhigh',True),
+    ('claude',None,True),('claude','low',True),('claude','medium',True),('claude','high',True),('claude','extra',True),
+    ('codex','extra',False),('claude','light',False),('codex','',False),('claude',True,False),('codex',3,False)])
+def test_effort_is_validated_and_saved_in_request(question_job,monkeypatch,provider,choice,valid):
+    app,job_id,folder,data,plan,calls=question_job
+    monkeypatch.setenv('PLOT_READER_AGENT',provider)
+    browser._json(folder/'job.json',{'status':'complete'})
+    monkeypatch.setattr(browser.app.state,'token','test-local-token')
+    async def skip_run(*args,**kwargs):pass
+    monkeypatch.setattr(browser,'_run_job',skip_run)
+    body={'upload_id':data['upload_id'],'category':'spectroscopy','mode':'selected'}
+    if choice is not None:body['model_effort']=choice
+    with TestClient(browser.app,base_url='http://127.0.0.1') as client:
+        response=client.post('/api/jobs',json=body,headers={'X-Plot-Reader-Token':'test-local-token'})
+        assert response.status_code==(202 if valid else 400),response.text
+        if valid:
+            saved=browser._read(browser._job_dir(response.json()['id'])/'request.json')
+            assert saved['model_effort']==(choice or 'medium')
+
+
+def test_chosen_effort_survives_clarification_and_all_subsequent_stages(question_job):
+    app,job_id,folder,data,plan,calls=question_job
+    data.update(model_effort='high',allow_agent_questions=True)
+    browser._json(folder/'request.json',data)
+    asyncio.run(browser._run_job(app,job_id))
+    assert browser._read(folder/'job.json')['status']=='needs_input'
+    question=plan['clarifications'][0]
+    plan['clarifications']=[]
+    asyncio.run(browser._resume_selected(app,job_id,question,'Left',False))
+    result=browser._read(folder/'result.json')
+    assert result['request']['model_effort']=='high'
+    assert result['inference_profile']['effort']=='high'
+    assert len(calls)>=3
+    assert all(call['inference_profile']['effort_choice']=='high' for call in calls)

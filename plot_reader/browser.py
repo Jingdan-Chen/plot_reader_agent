@@ -41,7 +41,7 @@ from .browser_evidence import (coordinate_evidence, selection_overlay,
                                apply_selection_review, unsupported_centers, focused_marker_candidates, unique_selection_labels,
                                bind_review_candidates)
 from .luna_runtime import (COMMENT_SCHEMA, SELECTED_SCHEMA, SELECTION_REVIEW_SCHEMA, FOCUSED_REVIEW_SCHEMA, LunaError, LunaRunner,
-                           worker_dir, assistant_profile)
+                           worker_dir, assistant_profile, EFFORT_CHOICES)
 
 ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = Path(__file__).with_name("browser_ui")
@@ -260,6 +260,13 @@ async def index(request: Request) -> Response:
     page = (WEB_ROOT / "index.html").read_text()
     profile=assistant_profile()
     page=page.replace('__ASSISTANT_NAME__',html.escape(profile['name'])).replace('__ASSISTANT_PROFILE__',html.escape(profile['label']))
+    options = []
+    for effort in EFFORT_CHOICES[profile['provider']]:
+        label = effort.capitalize() + (' (default)' if effort == 'medium' else '')
+        selected = ' selected' if effort == 'medium' else ''
+        effective = assistant_profile(effort)
+        options.append(f'<option value="{html.escape(effort)}" data-profile-label="{html.escape(effective["label"])}"{selected}>{html.escape(label)}</option>')
+    page = page.replace('__MODEL_EFFORT_OPTIONS__', ''.join(options))
     return HTMLResponse(page.replace("__MEASUREMENT_DEFAULTS__", json.dumps(MEASUREMENT_DEFAULTS).replace("<", "\\u003c")))
 
 
@@ -520,12 +527,17 @@ async def create_job(request: Request) -> Response:
         allow_questions = body.get("allow_agent_questions", False)
         if type(allow_questions) is not bool:
             raise ValueError("Allow agent questions must be true or false")
+        effort = body.get("model_effort", "medium")
+        if not isinstance(effort, str):
+            raise ValueError("Choose an agent effort")
+        profile = assistant_profile(effort)
         request_data = {"upload_id": upload_id, "source_sha256": source["sha256"],
                         "target": target, "category": category, "mode": mode,
                         "channel_description": description,
                         "targets": targets,
                         "x_positions": positions,
                         "allow_agent_questions": allow_questions,
+                        "model_effort": profile["effort_choice"],
                         "normalization": bool(body.get("normalization", False)),
                         "normalization_reference": str(body.get("normalization_reference", "")).strip() or None,
                         "created_at": _now()}
@@ -542,7 +554,7 @@ async def create_job(request: Request) -> Response:
         task = asyncio.create_task(_run_job(request.app, job_id))
         request.app.state.tasks[job_id] = task
         return JSONResponse({"id": job_id, "status": "queued"}, status_code=202)
-    except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError) as exc:
+    except (ValueError, KeyError, FileNotFoundError, json.JSONDecodeError, LunaError) as exc:
         return _form_error(str(exc))
 
 
@@ -995,7 +1007,7 @@ async def _run_job(app: Starlette, job_id: str, resumed_plan: dict[str, Any] | N
                 inspection = await run_local(core.inspect_plot, str(image_path),
                                                       request_data.get("targets") or "requested plot features", labels or None)
                 _json(folder / "inspection.json", inspection)
-        task_runner = LunaRunner(emit)
+        task_runner = LunaRunner(emit, effort=request_data.get("model_effort"))
         app.state.runners[job_id] = task_runner
         calibration_warnings: list[str] = []
         if request_data["mode"] == "selected":
@@ -1168,7 +1180,7 @@ Engine summary: {json.dumps({k: measured.get(k) for k in ('x_axis','y_axis','bas
         result = {"id": job_id, "status": "complete", "experimental": request_data["mode"] == "complete",
                   "request": request_data, "source": {"name": upload_record["original_name"],
                       "sha256": upload_record["sha256"], **target_meta},
-                  "engine": job.get("engine"), "comment": comment,
+                  "engine": job.get("engine"), "comment": comment, "inference_profile": task_runner.profile,
                   "review_issues": list(dict.fromkeys([*calibration_warnings, *measured.get("coordinate_review_warnings", []), *measured.get("question_policy_warnings", []), *narrative_issues])),
                   "measurement": {k: measured.get(k) for k in ("implementation_id", "x_axis", "y_axis", "baseline_pixel", "reference_label", "calibration_residual_transformed", "calibration_warnings", "coordinate_review_warnings", "question_policy_warnings", "inventory_complete", "unresolved_inventory") if k in measured},
                   "overlay_path": str(overlay.relative_to(folder)), "completed_at": _now()}
@@ -1249,7 +1261,7 @@ async def _resume_selected(app: Starlette, job_id: str, question: dict[str, Any]
     async def emit(event: dict[str, Any]) -> None:
         await _emit(app, job_id, event.get("type", "progress"), event.get("message", event.get("text", "")))
 
-    runner = LunaRunner(emit)
+    runner = LunaRunner(emit, effort=data.get("model_effort"))
     app.state.runners[job_id] = runner
     try:
         await _job_update(app, job_id, status="running", stage="clarification")
@@ -1473,6 +1485,14 @@ async def result(request: Request) -> Response:
     try:
         folder = _job_dir(request.path_params["job_id"])
         data = _read(folder / "result.json")
+        if "inference_profile" not in data:
+            saved_profiles = sorted((folder / "worker").glob("*/inference.json"))
+            for saved_profile in saved_profiles:
+                try:
+                    data["inference_profile"] = _read(saved_profile)
+                    break
+                except (OSError, json.JSONDecodeError):
+                    continue
         return JSONResponse(data)
     except (ValueError, FileNotFoundError, json.JSONDecodeError):
         return _form_error("Result not ready", 404)

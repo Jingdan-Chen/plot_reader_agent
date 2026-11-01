@@ -33,6 +33,8 @@
       items = calls.map((call,index)=>({label:`${index+1}. ${call.name}`,value:finite(call.elapsed_seconds),
         details:[['Workflow stage',stageName(call.stage)],['Status',call.status || 'Unknown'],
           ...(call.provider ? [['Provider',call.provider]] : []),...(call.model ? [['Model',call.model]] : []),
+          ...(call.effort ? [['Effort',call.effort_choice || call.effort]] : []),
+          ...(call.effort_choice && call.effort_choice!==call.effort ? [['CLI effort',call.effort]] : []),
           ['Started after',seconds(call.start)],['Finished after',seconds(call.end)]],
         description:mode === 'model' ? 'CLI round trip, including startup, transfer, provider queueing, inference and response validation.' : 'Wall time in this Python worker or subprocess, including any child tools such as Tesseract.'}));
     } else {

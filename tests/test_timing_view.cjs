@@ -53,9 +53,9 @@ test('stage hover details retain model and Python portions and call counts', () 
 
 test('call hover details include status, provider, model and timing offsets safely', () => {
   const timing={summary:{total_seconds:4},model_calls:[{name:'<script>',stage:'review',elapsed_seconds:2,
-    status:'failed',provider:'claude',model:'haiku',start:1,end:3}]};
+    status:'failed',provider:'claude',model:'haiku',effort:'xhigh',effort_choice:'extra',start:1,end:3}]};
   const html=tooltipMarkup(breakdown(timing,'model').items[0]);
-  for(const value of ['&lt;script&gt;','failed','claude','haiku','Review results and explain','1.000 s','3.000 s']) assert.ok(html.includes(value),value);
+  for(const value of ['&lt;script&gt;','failed','claude','haiku','extra','xhigh','CLI effort','Review results and explain','1.000 s','3.000 s']) assert.ok(html.includes(value),value);
   assert.ok(!html.includes('<script>'));
 });
 

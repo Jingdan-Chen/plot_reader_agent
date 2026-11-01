@@ -7,10 +7,14 @@ plot-reading application with remote visual inference and local measurements.
 
 - Codex setup: run `python3 scripts/setup.py --agent codex --smoke-test`, then
   `uv run plot-reader web --agent codex`. Plot inference is exactly
-  `gpt-6-luna`, high reasoning effort, priority/Fast service tier.
+  `gpt-6-luna`, medium reasoning effort by default, priority/Fast service tier.
 - Claude setup: run `python3 scripts/setup.py --agent claude --smoke-test`, then
   `uv run plot-reader web --agent claude`. Plot inference is exactly
-  `claude-haiku-5-5`, medium effort.
+  `claude-haiku-5-5`, medium effort by default.
+- Each analysis uses the user's selected effort for every model call, including
+  repairs, tool decisions, reviews and clarification resumes. OpenAI options are
+  light/medium/high/xhigh (light maps to low); Claude options are
+  low/medium/high/extra (extra maps to xhigh). Persist the choice with the run.
 - Check Tesseract, Poppler, Python >=3.11, uv, the selected CLI and account access.
   The setup wrapper reports missing system packages; use the README commands.
 - A smoke test makes one real inference call. Run it when the user asks you to

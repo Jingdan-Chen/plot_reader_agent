@@ -20,6 +20,7 @@
   const esc = value => String(value ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
   const setStep = step => {
     state.step = step;
+    if (step === 3) updateEffortDisplay();
     $$('[data-panel]').forEach(node => node.classList.toggle('hidden', Number(node.dataset.panel) !== step));
     $$('.step').forEach(node => { const n = Number(node.dataset.step); node.classList.toggle('active', n === step); node.classList.toggle('done', n < step); });
     window.scrollTo({top: 0, behavior: 'smooth'});
@@ -208,6 +209,10 @@
     updateTargetHint();
   };
   $('#normalize').addEventListener('change', updateModeFields);
+  const updateEffortDisplay = () => {
+    $('#assistant-profile').textContent = $('#model-effort').selectedOptions[0].dataset.profileLabel;
+  };
+  $('#model-effort').addEventListener('change', updateEffortDisplay);
   $('#allow-agent-questions').addEventListener('change', () => {
     $('#agent-question-status').textContent = $('#allow-agent-questions').checked ? 'On' : 'Off';
   });
@@ -215,7 +220,7 @@
     const spectrum = $('#spectrum-type').value;
     const isNMR = state.category === 'spectroscopy' && spectrum === 'NMR';
     const channel = state.category === 'spectroscopy' ? `${spectrum}${isNMR && $('#nmr-nucleus').value ? ` · ${$('#nmr-nucleus').value}` : ''}` : state.category === 'plot' ? $('#plot-kind').value : $('#channel-description').value.trim();
-    return {channel, mode: state.mode, targets: $('#feature-targets').value.trim() || defaultTargets(), xPositions: $('#x-positions').value.trim(), normalization: $('#normalize').checked, reference: $('#normalization-reference').value.trim(), allowAgentQuestions: $('#allow-agent-questions').checked};
+    return {channel, mode: state.mode, targets: $('#feature-targets').value.trim() || defaultTargets(), xPositions: $('#x-positions').value.trim(), normalization: $('#normalize').checked, reference: $('#normalization-reference').value.trim(), allowAgentQuestions: $('#allow-agent-questions').checked, modelEffort: $('#model-effort').value};
   };
   $('#to-review').addEventListener('click', () => {
     showError(''); const info = summary();
@@ -224,7 +229,7 @@
     const positions = info.xPositions.split(/[,;\n]+/).map(x=>x.trim()).filter(Boolean);
     if (positions.some(x=>!Number.isFinite(Number(x)))) return showError('Enter x positions as finite numbers separated by commas.');
     $('#review-summary').textContent = `${info.channel} · ${info.mode === 'complete' ? 'complete curves, experimental' : 'selected features'}${info.normalization ? ` · normalized to ${info.reference}` : ''}`;
-    $('#request-review').innerHTML = `<div class="review-line"><span>SOURCE</span><strong>${esc(state.upload.original_name)}${state.page ? ` · page ${state.page}` : ''}</strong></div><div class="review-line"><span>FIGURE</span><strong>${esc(state.upload.explanation || 'Uploaded image')}</strong></div><div class="review-line"><span>CHANNEL</span><strong>${esc(info.channel)}</strong></div><div class="review-line"><span>EXTRACTION</span><strong>${info.mode === 'complete' ? '<span class="mode-tag amber">EXPERIMENTAL</span> Complete curves' : 'Selected peaks or points'}</strong></div><div class="review-line"><span>MEASURE</span><strong>${esc(info.targets || 'Requested x positions')}${info.xPositions ? ` · x = ${esc(info.xPositions)}` : ''}</strong></div><div class="review-line"><span>REFERENCE</span><strong>${info.normalization ? esc(info.reference) : 'No normalization'}</strong></div><div class="review-line"><span>AGENT QUESTIONS</span><strong>${info.allowAgentQuestions ? 'Allowed during extraction' : 'Off · continue with review warnings'}</strong></div>`;
+    $('#request-review').innerHTML = `<div class="review-line"><span>SOURCE</span><strong>${esc(state.upload.original_name)}${state.page ? ` · page ${state.page}` : ''}</strong></div><div class="review-line"><span>FIGURE</span><strong>${esc(state.upload.explanation || 'Uploaded image')}</strong></div><div class="review-line"><span>CHANNEL</span><strong>${esc(info.channel)}</strong></div><div class="review-line"><span>EXTRACTION</span><strong>${info.mode === 'complete' ? '<span class="mode-tag amber">EXPERIMENTAL</span> Complete curves' : 'Selected peaks or points'}</strong></div><div class="review-line"><span>MEASURE</span><strong>${esc(info.targets || 'Requested x positions')}${info.xPositions ? ` · x = ${esc(info.xPositions)}` : ''}</strong></div><div class="review-line"><span>REFERENCE</span><strong>${info.normalization ? esc(info.reference) : 'No normalization'}</strong></div><div class="review-line"><span>AGENT EFFORT</span><strong>${esc(info.modelEffort)}</strong></div><div class="review-line"><span>AGENT QUESTIONS</span><strong>${info.allowAgentQuestions ? 'Allowed during extraction' : 'Off · continue with review warnings'}</strong></div>`;
     $('#launch-actions').classList.remove('hidden'); $('#result-view').classList.add('hidden'); $('#job-progress').classList.add('hidden'); $('#clarification').classList.add('hidden'); $('#begin-extraction').disabled = false; setStep(4);
   });
   $('#begin-extraction').addEventListener('click', async () => {
@@ -239,6 +244,7 @@
       $('#plot-kind').value = 'Scatter plot'; $('#spectrum-type').value = 'NMR';
       $('#nmr-nucleus').value = ''; $('#normalize').checked = false;
       $('#allow-agent-questions').checked = false; $('#agent-question-status').textContent = 'Off';
+      $('#model-effort').value = 'medium'; updateEffortDisplay();
       $('#normalization-reference').value = '';
       $('input[name="mode"][value="selected"]').checked = true;
       $$('.mode-option').forEach(x => x.classList.toggle('selected', $('input', x).checked));
@@ -255,7 +261,7 @@
     const description = state.category === 'spectroscopy' ? `${$('#spectrum-type').value}${nucleus}` : state.category === 'plot' ? $('#plot-kind').value : $('#channel-description').value.trim();
     const body = {upload_id: state.upload.id, category: state.category, mode: state.mode,
       description, targets: info.targets, x_positions: info.xPositions, normalization: info.normalization,
-      normalization_reference: info.reference, allow_agent_questions: info.allowAgentQuestions};
+      normalization_reference: info.reference, allow_agent_questions: info.allowAgentQuestions, model_effort: info.modelEffort};
     try {
       const job = await apiPost('/api/jobs', body); state.jobId = job.id; $('#begin-extraction').disabled = true; $('#launch-actions').classList.add('hidden');
       $('#job-progress').classList.remove('hidden'); $('#progress-title').textContent = 'Preparing your extraction'; $('#progress-status').textContent = 'QUEUED'; $('#progress-bar').style.width = '12%';
@@ -324,6 +330,7 @@
     if (job.status === 'failed') { showError(job.error || 'The extraction could not be completed.'); $('#begin-extraction').textContent = 'Start a new run'; $('#begin-extraction').disabled = false; return; }
     if (job.status === 'cancelled') { $('#progress-title').textContent = 'Extraction cancelled'; $('#begin-extraction').textContent = 'Run again'; $('#begin-extraction').disabled = false; return; }
     const result = await api(`/api/jobs/${job.id}/result`); state.result = result; $('#result-view').classList.remove('hidden'); $('#launch-actions').classList.remove('hidden'); $('#begin-extraction').textContent = 'New extraction ↗'; $('#begin-extraction').disabled = false;
+    if (result.inference_profile?.label) $('#assistant-profile').textContent = result.inference_profile.label;
     const reviewCount = (result.rows||[]).filter(r=>r.status!=='resolved').length;
     const exp = result.experimental ? '<div class="result-banner experimental">⚠ Complete curve extraction is experimental. Review the overlay and unresolved measurements carefully.</div>' : `<div class="result-banner ${reviewCount?'experimental':''}">${reviewCount ? `⚠ Extraction completed · ${reviewCount} rows need review` : '✓ Measurements completed'} · Check source alignment before using the values.</div>`;
     const rows = result.rows || []; const cols = ['panel','series','feature','status','x','y','height_relative','reason','method','review_note'];

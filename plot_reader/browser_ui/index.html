@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="dark">
   <title>Plot Reader · __ASSISTANT_NAME__</title>
-  <link rel="stylesheet" href="/assets/app.css?v=20261101-agent-questions-1">
+  <link rel="stylesheet" href="/assets/app.css?v=20261101-agent-effort-1">
 </head>
 <body>
   <header class="topbar">
@@ -82,7 +82,7 @@
         <div class="field-block"><label for="x-positions">Specific x positions <span class="optional">optional</span></label><input id="x-positions" type="text" placeholder="For example: 2.1, 3.5, 4.0"><div class="field-hint">Enter values separated by commas. Use the axis units shown on the plot.</div></div>
         <label class="check-row"><input id="normalize" type="checkbox"><span class="fake-check"></span><span><strong>Normalize peak heights</strong><small>Compare heights relative to a selected reference peak.</small></span></label>
         <div id="normalization-wrap" class="field-block hidden"><label for="normalization-reference">Reference feature</label><input id="normalization-reference" type="text" placeholder="For example: peak A or the labeled reference signal"><div class="field-hint">The original measured values are preserved if normalization cannot be supported by the image.</div></div>
-        <div class="extraction-settings"><div class="eyebrow">EXTRACTION SETTINGS</div><label class="settings-switch" for="allow-agent-questions"><span><strong>Allow the agent to ask questions during extraction</strong><small id="agent-question-hint">Off by default. Extraction continues with ambiguous items marked for review. Turn on to allow focused clarification questions.</small></span><span class="settings-switch-control"><input id="allow-agent-questions" type="checkbox" role="switch" aria-label="Allow the agent to ask questions during extraction" aria-describedby="agent-question-hint"><span id="agent-question-status">Off</span></span></label></div>
+        <div class="extraction-settings"><div class="eyebrow">EXTRACTION SETTINGS</div><div class="effort-setting"><label for="model-effort">Agent effort · __ASSISTANT_NAME__</label><select id="model-effort" aria-describedby="model-effort-hint">__MODEL_EFFORT_OPTIONS__</select><p id="model-effort-hint">Medium is the default. Higher effort can take longer and use more tokens.</p></div><label class="settings-switch" for="allow-agent-questions"><span><strong>Allow the agent to ask questions during extraction</strong><small id="agent-question-hint">Off by default. Extraction continues with ambiguous items marked for review. Turn on to allow focused clarification questions.</small></span><span class="settings-switch-control"><input id="allow-agent-questions" type="checkbox" role="switch" aria-label="Allow the agent to ask questions during extraction" aria-describedby="agent-question-hint"><span id="agent-question-status">Off</span></span></label></div>
         <div class="review-summary" id="review-summary"></div>
         <div class="panel-actions"><button class="button secondary back-button" data-back="2" type="button">← Back</button><button class="button primary" id="to-review" type="button">Review request <span>→</span></button></div>
       </section>
@@ -105,7 +105,7 @@
       <div class="agent-activity" role="status" aria-live="polite" aria-atomic="true"><div><span class="activity-dot"></span><strong>__ASSISTANT_NAME__ · latest action</strong><time id="latest-action-time"></time></div><p id="latest-action">Waiting for an extraction request.</p></div>
       <div class="rail-divider"></div>
       <div class="rail-meta"><span>MEASUREMENT ENGINE</span><strong>Plot Reader <span class="engine-version">full</span></strong><small>Local coordinates · traceable output</small></div>
-      <div class="rail-meta"><span>INTERPRETATION</span><strong>__ASSISTANT_PROFILE__</strong><small>Image review · structured measurements</small></div>
+      <div class="rail-meta"><span>INTERPRETATION</span><strong id="assistant-profile">__ASSISTANT_PROFILE__</strong><small>Image review · structured measurements</small></div>
     </aside>
   </main>
 
@@ -113,7 +113,7 @@
   <div id="toast" class="toast hidden" role="status"></div>
   <script src="/assets/job-watch.js?v=20261031-feedback-radio-1" defer></script>
   <script id="measurement-defaults" type="application/json">__MEASUREMENT_DEFAULTS__</script>
-  <script src="/assets/timing-view.js?v=20261101-timing-pie-1" defer></script>
-  <script src="/assets/app.js?v=20261101-agent-questions-1" defer></script>
+  <script src="/assets/timing-view.js?v=20261101-agent-effort-1" defer></script>
+  <script src="/assets/app.js?v=20261101-agent-effort-1" defer></script>
 </body>
 </html>

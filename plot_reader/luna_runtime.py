@@ -95,15 +95,25 @@ class LunaError(RuntimeError):
     pass
 
 
-def assistant_profile() -> dict[str, str]:
+EFFORT_CHOICES = {
+    'codex': {'light': 'low', 'medium': 'medium', 'high': 'high', 'xhigh': 'xhigh'},
+    'claude': {'low': 'low', 'medium': 'medium', 'high': 'high', 'extra': 'xhigh'},
+}
+
+
+def assistant_profile(effort: str | None = None) -> dict[str, str]:
     provider=os.environ.get('PLOT_READER_AGENT','codex').strip().lower()
+    if provider not in EFFORT_CHOICES:
+        raise LunaError('PLOT_READER_AGENT must be codex or claude; no model fallback was used.')
+    choice = 'medium' if effort is None else effort
+    if not isinstance(choice, str) or choice not in EFFORT_CHOICES[provider]:
+        raise LunaError(f"Choose a valid {provider} effort: {', '.join(EFFORT_CHOICES[provider])}.")
+    actual = EFFORT_CHOICES[provider][choice]
     if provider=='codex':
-        return {'provider':provider,'name':'LUNA','model':'gpt-6-luna','effort':'high',
-                'speed':'priority','label':'LUNA 6 · high · Fast'}
-    if provider=='claude':
-        return {'provider':provider,'name':'Haiku','model':'claude-haiku-5-5','effort':'medium',
-                'speed':'standard','label':'Haiku 5.5 · medium'}
-    raise LunaError('PLOT_READER_AGENT must be codex or claude; no model fallback was used.')
+        return {'provider':provider,'name':'LUNA','model':'gpt-6-luna','effort':actual,
+                'effort_choice':choice,'speed':'priority','label':f'LUNA 6 · {choice} · Fast'}
+    return {'provider':provider,'name':'Haiku','model':'claude-haiku-5-5','effort':actual,
+            'effort_choice':choice,'speed':'standard','label':f'Haiku 5.5 · {choice}'}
 
 
 @lru_cache(maxsize=4)
@@ -144,9 +154,10 @@ def claude_input(prompt: str, images: list[str]) -> bytes:
 class LunaRunner:
     """Runs bounded, schema-constrained Codex CLI calls with saved login."""
 
-    def __init__(self, emit: EventCallback, timeout: int = 900):
+    def __init__(self, emit: EventCallback, timeout: int = 900, *, effort: str | None = None):
         self.emit = emit
         self.timeout = timeout
+        self.profile = assistant_profile(effort)
         self.process: asyncio.subprocess.Process | None = None
         self.last_error: str | None = None
         self.structured_output: dict | None = None
@@ -169,7 +180,7 @@ class LunaRunner:
 
     async def call(self, *, prompt: str, schema: dict[str, Any],
                    images: list[str], workdir: str) -> dict[str, Any]:
-        profile=assistant_profile()
+        profile=self.profile
         executable=shutil.which(profile['provider'])
         if not executable:
             raise LunaError(f"{profile['provider']} CLI is unavailable on PATH")
@@ -184,8 +195,8 @@ class LunaRunner:
         response_path.unlink(missing_ok=True)
         schema_path.write_text(json.dumps(schema, allow_nan=False))
         args = [executable, "--strict-config", "-a", "never", "exec", "--json",
-                "--ignore-user-config", "--skip-git-repo-check", "-m", "gpt-6-luna",
-                "-c", "model_reasoning_effort=high", "-c", "service_tier=priority",
+                "--ignore-user-config", "--skip-git-repo-check", "-m", profile['model'],
+                "-c", f"model_reasoning_effort={profile['effort']}", "-c", "service_tier=priority",
                 "-s", "read-only", "-C", str(worker)]
         for feature in DISABLED_FEATURES:
             args.extend(["--disable", feature])
@@ -206,7 +217,8 @@ class LunaRunner:
         await self.emit({"type": "luna_started",'message':action,'provider':profile['provider']})
         (worker/'inference.json').write_text(json.dumps(profile,indent=2)+'\n')
         try:
-            with timing_span("model_wait", worker.name, provider=profile["provider"], model=profile["model"]):
+            with timing_span("model_wait", worker.name, provider=profile["provider"], model=profile["model"],
+                             effort=profile["effort"], effort_choice=profile["effort_choice"]):
                 self.process = await asyncio.create_subprocess_exec(
                     *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE, cwd=worker,
