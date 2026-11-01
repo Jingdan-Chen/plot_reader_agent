@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+if [ -x "$script_dir/.venv/bin/python" ]; then
+  PYTHONPATH="$script_dir${PYTHONPATH:+:$PYTHONPATH}" exec "$script_dir/.venv/bin/python" -m plot_reader.dispatch "$@"
+fi
+exec uv run --project "$script_dir" --frozen plot-reader "$@"

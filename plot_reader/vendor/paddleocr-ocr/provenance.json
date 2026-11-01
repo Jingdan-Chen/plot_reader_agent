@@ -1,0 +1,8 @@
+{
+  "source": "paddleocr-ocr local skill",
+  "files": {
+    "SKILL.md": "9914cbd77afaf4707793e8156eeda8b7cf22d55f9a46153ca30b33068bfa532f",
+    "scripts/extract_api.py": "4ba0286b21705898d2a31019c2533b10077176bec0c32f251b4c771b47ef7a22",
+    "scripts/materialize_mcp_result.py": "fe6c1923f61d5e6e921c3076b57d8dbe611513641e1cf6bd85a0de0adc9c61b6"
+  }
+}

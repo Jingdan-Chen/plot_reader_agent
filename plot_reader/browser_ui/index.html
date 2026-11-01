@@ -1,0 +1,117 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="dark">
+  <title>Plot Reader · __ASSISTANT_NAME__</title>
+  <link rel="stylesheet" href="/assets/app.css?v=20261101-agent-activity-1">
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="#" aria-label="Plot Reader home"><span class="brand-mark">↗</span><span>Plot Reader</span></a>
+    <div class="top-context"><span class="local-dot"></span> Local workspace <span class="top-divider">·</span> __ASSISTANT_NAME__ assisted</div>
+    <button class="history-toggle" id="history-toggle" type="button"><span>◷</span> Run history</button>
+  </header>
+
+  <main class="layout">
+    <section class="workarea" aria-label="Extraction workflow">
+      <div class="intro">
+        <div class="eyebrow">SCIENTIFIC FIGURE DIGITISATION</div>
+        <h1>Turn a figure into<br><span>measured data.</span></h1>
+        <p>Upload an image or choose a picture from a PDF, then tell LUNA which measurements you need.</p>
+      </div>
+
+      <nav class="steps" aria-label="Workflow steps">
+        <button class="step active" data-step="1"><span>01</span> Source</button><i></i>
+        <button class="step" data-step="2"><span>02</span> Channel</button><i></i>
+        <button class="step" data-step="3"><span>03</span> Measure</button><i></i>
+        <button class="step" data-step="4"><span>04</span> Review</button>
+      </nav>
+
+      <div id="form-error" class="notice error hidden" role="alert"></div>
+
+      <section class="step-panel" data-panel="1">
+        <div class="section-head"><div><div class="eyebrow">STEP 01 / SOURCE</div><h2>Choose your figure</h2></div><span class="step-count">1 of 4</span></div>
+        <label class="upload-zone" id="drop-zone">
+          <input id="file-input" type="file" accept=".pdf,.png,.jpg,.jpeg,.webp,application/pdf,image/png,image/jpeg,image/webp">
+          <span class="upload-icon">↑</span><strong>Drop a PDF or image here</strong><span>or browse your files · PDF, PNG, JPG, WebP</span>
+          <span class="file-limit">Up to 60 MB</span>
+        </label>
+        <p class="field-hint">Images are selected automatically. For PDFs, PaddleOCR finds pictures for you to choose from. Selected PDF pages are sent to AI Studio for processing.</p>
+        <div id="source-card" class="source-card hidden">
+          <div class="source-card-copy"><span class="file-badge" id="source-kind">PDF</span><div><strong id="source-name"></strong><small id="source-meta"></small></div></div>
+          <button id="remove-source" type="button" class="icon-button" aria-label="Remove source">×</button>
+        </div>
+        <div id="pdf-range" class="card-inset hidden">
+          <p id="range-description">Choose the pages to search for pictures.</p>
+          <div class="page-range-fields"><label>From page<input id="page-start" type="number" min="1" value="1"></label><label>To page<input id="page-end" type="number" min="1" value="10"></label><button id="find-figures" class="button primary" type="button">Find figures</button></div>
+        </div>
+        <div id="pdf-intake-status" class="intake-status hidden" role="status" aria-live="polite"></div>
+        <div id="pdf-figures" class="figure-gallery hidden" aria-label="Extracted PDF pictures"></div>
+        <details id="ocr-details" class="ocr-details hidden"><summary>OCR extraction details</summary><pre id="ocr-report"></pre></details>
+        <div class="panel-actions"><span class="quiet">Sources and results are saved locally.</span><button id="to-channel" class="button primary" type="button" disabled>Continue <span>→</span></button></div>
+      </section>
+
+      <section class="step-panel hidden" data-panel="2">
+        <div class="section-head"><div><div class="eyebrow">STEP 02 / CHANNEL</div><h2>What kind of figure?</h2></div><span class="step-count">2 of 4</span></div>
+        <div class="choice-grid three">
+          <button class="choice-card selected" data-category="spectroscopy" type="button"><span class="choice-icon">∿</span><strong>Spectroscopy</strong><small>NMR, IR, Raman, UV–Vis</small><span class="selection-dot"></span></button>
+          <button class="choice-card" data-category="plot" type="button"><span class="choice-icon">⠿</span><strong>Normal plot</strong><small>Scatter, line, markers</small><span class="selection-dot"></span></button>
+          <button class="choice-card" data-category="other" type="button"><span class="choice-icon">✳</span><strong>Others</strong><small>Describe the figure type</small><span class="selection-dot"></span></button>
+        </div>
+        <div id="spectroscopy-options" class="conditional card-inset">
+          <label for="spectrum-type">Spectrum type</label>
+          <select id="spectrum-type"><option value="NMR">NMR · chemical shift</option><option value="IR">IR</option><option value="Raman">Raman</option><option value="UV–Vis">UV–Vis</option><option value="custom">Other spectrum</option></select>
+          <div id="nmr-options"><label for="nmr-nucleus">NMR nucleus <span class="optional">optional</span></label>
+          <select id="nmr-nucleus"><option value="">Not specified</option><option>¹H</option><option>¹³C</option><option>¹⁹F</option><option>³¹P</option><option>²⁹Si</option><option>Other</option></select></div>
+          <p class="field-hint">Axis direction and units are read from the figure; reversed chemical shift axes are supported.</p>
+        </div>
+        <div id="other-description-wrap" class="conditional card-inset hidden"><label for="channel-description">Describe the figure and what you want extracted</label><textarea id="channel-description" rows="3" placeholder="Describe its visual form and the values you need."></textarea><p class="field-hint">The first version supports Cartesian plots and spectra. The tool will explain if another figure type cannot be measured.</p></div>
+        <div id="plot-description-wrap" class="conditional card-inset hidden"><label for="plot-kind">Plot style</label><select id="plot-kind"><option>Scatter plot</option><option>Line plot</option><option>Markers with fitted lines</option><option>Other Cartesian plot</option></select><p class="field-hint">Describe the series you want in the next step. Markers and fitted curves are treated separately.</p></div>
+        <div class="panel-actions"><button class="button secondary back-button" data-back="1" type="button">← Back</button><button class="button primary next-button" data-next="3" type="button">Continue <span>→</span></button></div>
+      </section>
+
+      <section class="step-panel hidden" data-panel="3">
+        <div class="section-head"><div><div class="eyebrow">STEP 03 / MEASURE</div><h2>Choose your measurements</h2></div><span class="step-count">3 of 4</span></div>
+        <div class="mode-stack">
+          <label class="mode-option selected"><input type="radio" name="mode" value="selected" checked><span class="radio-dot"></span><span class="mode-copy"><strong>Selected peaks or points</strong><small>Measure the features you describe, with axis values and uncertainty.</small></span><span class="mode-tag">STANDARD</span></label>
+          <label class="mode-option experimental"><input type="radio" name="mode" value="complete"><span class="radio-dot"></span><span class="mode-copy"><strong>Complete curves</strong><small>Sample every visible column across all series in the figure.</small></span><span class="mode-tag amber">EXPERIMENTAL</span></label>
+        </div>
+        <div class="field-block"><label for="feature-targets">Which features or series should be measured?</label><textarea id="feature-targets" rows="3" aria-describedby="feature-default-hint"></textarea><div id="feature-default-hint" class="field-hint" aria-live="polite"></div></div>
+        <div class="field-block"><label for="x-positions">Specific x positions <span class="optional">optional</span></label><input id="x-positions" type="text" placeholder="For example: 2.1, 3.5, 4.0"><div class="field-hint">Enter values separated by commas. Use the axis units shown on the plot.</div></div>
+        <label class="check-row"><input id="normalize" type="checkbox"><span class="fake-check"></span><span><strong>Normalize peak heights</strong><small>Compare heights relative to a selected reference peak.</small></span></label>
+        <div id="normalization-wrap" class="field-block hidden"><label for="normalization-reference">Reference feature</label><input id="normalization-reference" type="text" placeholder="For example: peak A or the labeled reference signal"><div class="field-hint">The original measured values are preserved if normalization cannot be supported by the image.</div></div>
+        <div class="review-summary" id="review-summary"></div>
+        <div class="panel-actions"><button class="button secondary back-button" data-back="2" type="button">← Back</button><button class="button primary" id="to-review" type="button">Review request <span>→</span></button></div>
+      </section>
+
+      <section class="step-panel hidden" data-panel="4">
+        <div class="section-head"><div><div class="eyebrow">STEP 04 / REVIEW</div><h2>Ready to extract?</h2></div><span class="step-count">4 of 4</span></div>
+        <div class="request-review" id="request-review"></div>
+        <div id="job-progress" class="job-progress hidden"><div class="progress-top"><span class="spinner"></span><strong id="progress-title">Preparing extraction</strong><span id="progress-status" class="quiet"></span></div><div class="progress-track"><span id="progress-bar"></span></div><div id="progress-detail" class="progress-detail">Preparing the selected image for analysis.</div><button id="cancel-job" class="text-button danger-text" type="button">Cancel extraction</button></div>
+        <div id="clarification" class="clarification hidden"></div>
+        <div id="result-view" class="result-view hidden"></div>
+        <div class="panel-actions" id="launch-actions"><button class="button secondary back-button" data-back="3" type="button">← Back to measurements</button><button class="button primary launch-button" id="begin-extraction" type="button">Begin extraction <span>↗</span></button></div>
+      </section>
+      <footer class="footnote"><span>◈</span> Measurements use visible image evidence. Uncertain values stay marked for review.</footer>
+    </section>
+
+    <aside class="source-rail">
+      <div class="rail-head"><div><div class="eyebrow">SOURCE PREVIEW</div><strong id="rail-title">Waiting for a figure</strong></div><span class="rail-status" id="rail-status">EMPTY</span></div>
+      <div class="rail-preview empty" id="rail-preview"><div class="empty-art"><span>⌗</span><i>∿</i></div><span>Your plot will appear here</span></div>
+      <div class="rail-note" id="rail-note"><span class="rail-note-icon">i</span><span>The figure stays beside you as you choose the data to measure.</span></div>
+      <div class="agent-activity" role="status" aria-live="polite" aria-atomic="true"><div><span class="activity-dot"></span><strong>__ASSISTANT_NAME__ · latest action</strong><time id="latest-action-time"></time></div><p id="latest-action">Waiting for an extraction request.</p></div>
+      <div class="rail-divider"></div>
+      <div class="rail-meta"><span>MEASUREMENT ENGINE</span><strong>Plot Reader <span class="engine-version">full</span></strong><small>Local coordinates · traceable output</small></div>
+      <div class="rail-meta"><span>INTERPRETATION</span><strong>__ASSISTANT_PROFILE__</strong><small>Image review · structured measurements</small></div>
+    </aside>
+  </main>
+
+  <aside id="history-drawer" class="history-drawer hidden" aria-label="Saved runs"><div class="history-head"><div><div class="eyebrow">LOCAL WORKSPACE</div><h2>Run history</h2></div><button id="close-history" class="icon-button" aria-label="Close history">×</button></div><div id="history-list" class="history-list"></div><div class="history-foot">Sources and results are stored on this computer.</div></aside>
+  <div id="toast" class="toast hidden" role="status"></div>
+  <script src="/assets/job-watch.js?v=20261031-feedback-radio-1" defer></script>
+  <script id="measurement-defaults" type="application/json">__MEASUREMENT_DEFAULTS__</script>
+  <script src="/assets/app.js?v=20261101-agent-activity-1" defer></script>
+</body>
+</html>

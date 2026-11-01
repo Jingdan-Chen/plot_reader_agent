@@ -1,0 +1,19 @@
+{
+  "pyproject.toml": "f37a82e7abe9b8f7854bda222cc98fbd2390ed8db312a8800314a1cf1684475d",
+  "plot-reader": "ef77cc1189989a748a5a1874a75c307b516674dc89a8e1603be5b952cfcbbb6e",
+  "plot_reader/complete_cli.py": "8ccb464626db3540abe4b3fcba7bf7d6c5dd5f71431fa67d9622ce7b2b61518d",
+  "plot_reader/jev.py": "1203753daa3af1e9dc6d3909def344c3a6727ea6790c70e8a2961676e154ede4",
+  "plot_reader/server.py": "904e209d74ba15e27c638f9727308c8bed1d78cbe60d95a620371ad8c4235fba",
+  "plot_reader/dispatch.py": "0ad4044f6a433b188ac3b84a8983f555d6d7a1892e917be8d986ecd6685e01fa",
+  "plot_reader/complete_server.py": "b8d9f3debd9972274b25cc0074101045bad97b936efd7724515f7c76b8a47020",
+  "plot_reader/__init__.py": "b0e17c6e813b7f2dcbcfb481235210a410223788764daa3c9cebb42fcb91ac76",
+  "plot_reader/core.py": "a8b97a2ba8e8565745f95f48bfeca5318fda286c5140be06a6ef88dd3fdeb037",
+  "plot_reader/bench.py": "bda5fb7cbe62ce0c860c3fa085e42a8d74a99dd8ad1b2c136b07367714324519",
+  "plot_reader/cli.py": "b4792c0731f61be21c502ff2e00b99a1245e4c219576632dd7ec837a0e75bb22",
+  "plot_reader/complete.py": "c545ee5d697a1ad1a01fbe149a67c42ce136f6e27dd7de82070b6afe9672a9ea",
+  "plot_reader/usage.py": "ae0a07eeff16fda49fc7f84a5d84f83b291643bfeafaf488bdc9a61002f37ae5",
+  "plot_reader/fast/server.py": "48723693148514041a8dfc7707d643ef09533047c0d4faed4403fdeb316753b3",
+  "plot_reader/fast/__init__.py": "b0e17c6e813b7f2dcbcfb481235210a410223788764daa3c9cebb42fcb91ac76",
+  "plot_reader/fast/core.py": "32694df34fba311ad5f0391950bc4a594004beeaa80c53f0f18fb131febb5c33",
+  "plot_reader/fast/cli.py": "8957d4fb87ef8bb5cb2c21bb2cee1dd3b9fabdb8fcdcbf884809b12022f76c24"
+}

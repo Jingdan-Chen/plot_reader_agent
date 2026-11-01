@@ -1,0 +1,11 @@
+#!/bin/sh
+set -eu
+
+script_dir=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+shared_python=${PLOT_READER_SHARED_PYTHON:-/Users/jingdan/Documents/ChatGPT/read nmr shift/.venv/bin/python}
+
+if [ -x "$shared_python" ]; then
+    PYTHONPATH="$script_dir${PYTHONPATH:+:$PYTHONPATH}" exec "$shared_python" -m plot_reader.dispatch "$@"
+fi
+
+PYTHONPATH="$script_dir${PYTHONPATH:+:$PYTHONPATH}" UV_CACHE_DIR=${UV_CACHE_DIR:-/private/tmp/plot-reader-uv-cache} exec uv run --project "$script_dir" --frozen --no-editable python -m plot_reader.dispatch "$@"
