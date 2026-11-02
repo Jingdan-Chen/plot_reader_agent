@@ -23,6 +23,10 @@ from .timing import run_local, timing_span
 
 EventCallback = Callable[[dict[str, Any]], Awaitable[None]]
 
+# CLI JSON events can echo base64 images or large structured results on one line;
+# asyncio's default 64 KiB line limit would stop the reader and stall the worker.
+STREAM_LINE_LIMIT = 64 * 1024 * 1024
+
 DISABLED_FEATURES = (
     "shell_tool", "unified_exec", "view_image", "multi_agent", "apps", "plugins",
     "remote_plugin", "browser_use", "computer_use",
@@ -242,7 +246,7 @@ class LunaRunner:
                              effort=profile["effort"], effort_choice=profile["effort_choice"]):
                 self.process = await asyncio.create_subprocess_exec(
                     *args, stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE, cwd=worker,
+                    stderr=asyncio.subprocess.PIPE, cwd=worker, limit=STREAM_LINE_LIMIT,
                     env={k: v for k, v in os.environ.items() if k not in {"OPENAI_API_KEY", "CODEX_API_KEY", "CLAUDECODE", "TYPESAFE_API_KEY"}},
                     start_new_session=True)
                 stdout_task = asyncio.create_task(self._read_events(self.process.stdout, "stdout"))
@@ -282,7 +286,16 @@ class LunaRunner:
     async def _read_events(self, stream: asyncio.StreamReader | None, source: str) -> None:
         if stream is None:
             return
-        while line := await stream.readline():
+        while True:
+            try:
+                line = await stream.readline()
+            except ValueError:
+                # readline already discarded the oversized line; keep draining so
+                # the CLI never blocks on a full pipe.
+                self.last_error = self.last_error or "The CLI emitted an event larger than the stream line limit."
+                continue
+            if not line:
+                break
             raw = line.decode("utf-8", "replace").strip()
             try:
                 item = json.loads(raw)

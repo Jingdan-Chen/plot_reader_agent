@@ -13,7 +13,7 @@ from plot_reader.timing import AnalysisTiming, current_timing
 SCHEMA={'type':'object','properties':{'ready':{'type':'boolean'}},'required':['ready'],'additionalProperties':False}
 
 
-def fake_cli(monkeypatch,provider,result):
+def fake_cli(monkeypatch,provider,result,before=()):
     calls=[]
     monkeypatch.setenv('PLOT_READER_AGENT',provider)
     monkeypatch.setattr(runtime.shutil,'which',lambda _: '/mock/'+provider)
@@ -24,14 +24,15 @@ def fake_cli(monkeypatch,provider,result):
         def close(self):pass
     class Process:
         returncode=0
-        def __init__(self,args):
-            self.stdin=Input();self.stdout=asyncio.StreamReader();self.stderr=asyncio.StreamReader()
+        def __init__(self,args,limit):
+            self.stdin=Input();self.stdout=asyncio.StreamReader(limit=limit);self.stderr=asyncio.StreamReader(limit=limit)
             event={'type':'result','structured_output':result} if provider=='claude' else {'type':'thread.started','thread_id':'mock'}
+            for line in before:self.stdout.feed_data(line)
             self.stdout.feed_data((json.dumps(event)+'\n').encode());self.stdout.feed_eof();self.stderr.feed_eof()
             if provider=='codex':Path(args[args.index('-o')+1]).write_text(json.dumps(result))
         async def wait(self):return 0
     async def spawn(*args,**kwargs):
-        calls.append({'args':args,'options':kwargs});return Process(args)
+        calls.append({'args':args,'options':kwargs});return Process(args,kwargs.get('limit',2**16))
     monkeypatch.setattr(runtime.asyncio,'create_subprocess_exec',spawn)
     return calls
 
@@ -134,6 +135,23 @@ def test_schema_failure_does_not_claim_completed(tmp_path,monkeypatch):
     with pytest.raises(runtime.LunaError,match='violates'):
         asyncio.run(runtime.LunaRunner(emit).call(prompt='Task',schema=SCHEMA,images=[],workdir=str(tmp_path)))
     assert not any(event['type']=='luna_completed' for event in events)
+
+
+def test_claude_event_longer_than_asyncio_default_line_limit_is_read(tmp_path,monkeypatch):
+    echo=(json.dumps({'type':'user','message':{'content':[{'data':'A'*200_000}]}})+'\n').encode()
+    calls=fake_cli(monkeypatch,'claude',{'ready':True},before=[echo])
+    async def emit(event):pass
+    result=asyncio.run(runtime.LunaRunner(emit).call(prompt='Task',schema=SCHEMA,images=[],workdir=str(tmp_path)))
+    assert result=={'ready':True}
+    assert calls[0]['options']['limit']>=len(echo)
+
+
+def test_line_over_stream_limit_is_skipped_without_stopping_the_reader(tmp_path,monkeypatch):
+    monkeypatch.setattr(runtime,'STREAM_LINE_LIMIT',1024)
+    fake_cli(monkeypatch,'claude',{'ready':True},before=[b'{"type":"user","data":"'+b'A'*5000+b'"}\n'])
+    async def emit(event):pass
+    result=asyncio.run(runtime.LunaRunner(emit).call(prompt='Task',schema=SCHEMA,images=[],workdir=str(tmp_path)))
+    assert result=={'ready':True}
 
 
 def test_old_claude_cli_fails_before_model_execution(monkeypatch):
